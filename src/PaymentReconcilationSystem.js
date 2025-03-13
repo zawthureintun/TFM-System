@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect,useRef } from 'react';
 import {
   Paper,
   Table,
@@ -20,6 +20,7 @@ import {
   DialogActions,
   TextField,
   FormControl,
+  ButtonGroup,
   InputLabel
 } from '@mui/material';
 import { db } from './Firebase';
@@ -36,6 +37,8 @@ import {
 import { format } from 'date-fns';
 import CircularProgress from '@mui/material/CircularProgress';
 import { deleteDoc } from 'firebase/firestore';
+import { useReactToPrint } from 'react-to-print';
+import PrintableHistory from './PrintableHistory';
 
 const PaymentReconciliationSystem = () => {
   
@@ -61,6 +64,12 @@ const PaymentReconciliationSystem = () => {
     'WavePay',
     'Bank Transfer',
   ];
+  const [dateRange, setDateRange] = useState({
+    startDate: new Date(),
+    endDate: new Date()
+  });
+  const contentRef = useRef(null);
+  const reactToPrintFn = useReactToPrint({ contentRef });
 
   // Fetch customers and their data from Firestore
   useEffect(() => {
@@ -281,6 +290,52 @@ const PaymentReconciliationSystem = () => {
     };
   }, [orders, payments]);
 
+  const filteredOrders = useMemo(() => {
+    if (!dateRange.startDate || !dateRange.endDate) return orders;
+    return orders.filter(order => {
+      const orderDate = new Date(order.date);
+      return orderDate >= new Date(dateRange.startDate) && 
+             orderDate <= new Date(dateRange.endDate);
+    });
+  }, [orders, dateRange]);
+
+  const filteredPayments = useMemo(() => {
+    if (!dateRange.startDate || !dateRange.endDate) return payments;
+    return payments.filter(payment => {
+      const paymentDate = new Date(payment.date);
+      return paymentDate >= new Date(dateRange.startDate) && 
+             paymentDate <= new Date(dateRange.endDate);
+    });
+  }, [payments, dateRange]);
+
+  // Prepare statement data for printing
+  const statementData = useMemo(() => {
+    if (!selectedCustomer) return null;
+    
+    const customer = customers.find(c => c.id === selectedCustomer);
+    const totals = {
+      totalOrders: filteredOrders.reduce((sum, order) => sum + order.amount, 0),
+      totalPayments: filteredPayments.reduce((sum, payment) => sum + payment.amount, 0),
+      totalPaid: filteredOrders.reduce((sum, order) => sum + order.paidAmount, 0),
+      remainingBalance: filteredOrders.reduce((sum, order) => sum + (order.amount - order.paidAmount), 0),
+    };
+
+    return {
+      customer: customer?.name || 'Unknown Customer',
+      startDate: dateRange.startDate,
+      endDate: dateRange.endDate,
+      orders: filteredOrders,
+      payments: filteredPayments,
+      totals: totals,
+    };
+  }, [filteredOrders, filteredPayments, customers, selectedCustomer, dateRange]);
+
+
+  // Reset date range
+  const handleResetDateRange = () => {
+    setDateRange({ startDate: new Date(), endDate: new Date() });
+  };
+
   return (
     <Paper elevation={0} sx={{ p: 3, maxWidth: 'xl', mx: 'auto',border:'1px solid #ccc' }}>
       {/* Customer Selection */}
@@ -306,12 +361,53 @@ const PaymentReconciliationSystem = () => {
 
       {selectedCustomer && (
         <>
+        {/* Date Range Selection */}
+        <Box sx={{ mb: 3, display: 'flex', gap: 2, alignItems: 'center' }}>
+            <TextField
+              label="Start Date"
+              type="date"
+              value={dateRange.startDate}
+              onChange={(e) => setDateRange(prev => ({ ...prev, startDate: e.target.value }))}
+              InputLabelProps={{ shrink: true }}
+              sx={{ width: 200 }}
+            />
+            <TextField
+              label="End Date"
+              type="date"
+              value={dateRange.endDate}
+              onChange={(e) => setDateRange(prev => ({ ...prev, endDate: e.target.value }))}
+              InputLabelProps={{ shrink: true }}
+              sx={{ width: 200 }}
+            />
+            <ButtonGroup>
+              <Button 
+                variant="contained" 
+                onClick={reactToPrintFn}
+                disabled={!dateRange.startDate || !dateRange.endDate}
+              >
+                Print Statement
+              </Button>
+              <Button 
+                variant="outlined" 
+                onClick={handleResetDateRange}
+              >
+                Reset Dates
+              </Button>
+            </ButtonGroup>
+          </Box>
+
+          {/* Hidden Printable Component */}
+            <Box sx={{ display: 'none' }}>
+                {statementData && <PrintableHistory statementData={statementData} ref={contentRef}/>}
+                </Box>
+          
           {isLoading ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', my: 4 }}>
             <CircularProgress />
           </Box>
         ) : (
           <>
+          
           {/* Summary Section */}
           <Paper elevation={0} sx={{ p: 2, mb: 3, bgcolor: 'grey.50' }}>
             <Grid container spacing={3}>
