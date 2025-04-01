@@ -10,27 +10,42 @@ import { db } from './Firebase';
 const DataEntryForm = () => {
   const [formData, setFormData] = useState({
     date: '', itemName: '', description: '', formType: '', quantity: 1, 
-    price: 0, amount: 0, gateName: '', customerId: '' // Changed from customerName
+    price: 0, amount: 0, gateName: '', customerId: ''
   });
   
   const [customers, setCustomers] = useState([]);
+  const [itemNames, setItemNames] = useState([]); // New state for item names
   const [openModal, setOpenModal] = useState(false);
   const [newCustomer, setNewCustomer] = useState('');
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const [loading, setLoading] = useState(false);
+  const [gateNames, setGateNames] = useState([]);
 
-  // Fetch customers on component mount
+  // Fetch customers and item names on component mount
   useEffect(() => {
-    const fetchCustomers = async () => {
-      const querySnapshot = await getDocs(collection(db, 'customers'));
-      const customerList = querySnapshot.docs.map(doc => ({
+    const fetchData = async () => {
+      // Fetch customers
+      const customerSnapshot = await getDocs(collection(db, 'customers'));
+      const customerList = customerSnapshot.docs.map(doc => ({
         id: doc.id,
         name: doc.data().name
       }));
       setCustomers(customerList);
+
+      // Fetch unique item names from orders
+      const ordersSnapshot = await getDocs(collection(db, 'orders'));
+      const allItemNames = ordersSnapshot.docs.map(doc => doc.data().itemName);
+      const uniqueItemNames = [...new Set(allItemNames)].map(name => ({ name })); // Remove duplicates and format
+      setItemNames(uniqueItemNames);
+
+      // Fetch unique gate names from orders
+      const allGateNames = ordersSnapshot.docs.map(doc => doc.data().gateName)
+      .filter(name => name); // Remove empty values
+      const uniqueGateNames = [...new Set(allGateNames)].map(name => ({ name }));
+      setGateNames(uniqueGateNames);
     };
-    fetchCustomers();
+    fetchData();
   }, []);
 
   const handleSubmit = async (e) => {
@@ -44,17 +59,28 @@ const DataEntryForm = () => {
     try {
       const orderData = {
         ...formData,
-        customerName: customers.find(c => c.id === formData.customerId)?.name || '', // Add customerName for reference
+        customerName: customers.find(c => c.id === formData.customerId)?.name || '',
         quantity: formData.quantity ? parseFloat(formData.quantity) : 0,
         price: formData.price ? parseFloat(formData.price) : 0,
         amount: formData.amount ? parseFloat(formData.amount) : 0,
         createdAt: serverTimestamp(),
         status: 'unpaid',
         paidAmount: 0,
-        orderId: `${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 100)}` // Generate random order ID
+        orderId: `${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 100)}`
       };
       
       const docRef = await addDoc(collection(db, 'orders'), orderData);
+      
+      // Update itemNames if new item is added
+      if (!itemNames.some(item => item.name === formData.itemName)) {
+        setItemNames([...itemNames, { name: formData.itemName }]);
+      }
+
+      // Update gateNames if new gate name is added
+      if (formData.gateName && !gateNames.some(gate => gate.name === formData.gateName)) {
+        setGateNames([...gateNames, { name: formData.gateName }]);
+      }
+      
       setSnackbar({ open: true, message: 'Order saved successfully!', severity: 'success' });
       handleClear();
     } catch (error) {
@@ -77,11 +103,11 @@ const DataEntryForm = () => {
   const handleClear = () => {
     setFormData({
       date: '', itemName: '', description: '', formType: '', quantity: '', 
-      price: '', amount: '', gateName: '', customerId: '' // Changed from customerName
+      price: '', amount: '', gateName: '', customerId: ''
     });
   };
 
-  // Customer management functions
+  // Customer management functions remain unchanged
   const handleAddCustomer = async () => {
     if (!newCustomer) return;
     try {
@@ -119,21 +145,21 @@ const DataEntryForm = () => {
   };
 
   return (
-    <Paper elevation={0} sx={{ p: 3, maxWidth: 'xl', mx: 'auto',border:'1px solid #ccc' }}>
+    <Paper elevation={0} sx={{ p: 3, maxWidth: 'xl', mx: 'auto', border:'1px solid #ccc' }}>
       <form onSubmit={handleSubmit}>
         <Grid container spacing={3}>
-          {/* Customer Selection - First Row */}
+          {/* Customer Selection */}
           <Grid item xs={12} md={8}>
-          <Autocomplete
-            options={customers}
-            getOptionLabel={(option) => option.name} // Display name in the dropdown
-            value={customers.find(c => c.id === formData.customerId) || null} // Match by ID
-            onChange={(e, newValue) => handleChange('customerId', newValue?.id || '')} // Set customerId
-            renderInput={(params) => (
-              <TextField {...params} label="Customer Name" required fullWidth />
-            )}
-          />
-        </Grid>
+            <Autocomplete
+              options={customers}
+              getOptionLabel={(option) => option.name}
+              value={customers.find(c => c.id === formData.customerId) || null}
+              onChange={(e, newValue) => handleChange('customerId', newValue?.id || '')}
+              renderInput={(params) => (
+                <TextField {...params} label="Customer Name" required fullWidth />
+              )}
+            />
+          </Grid>
           <Grid item xs={12} md={4}>
             <Button 
               variant="outlined" 
@@ -159,16 +185,19 @@ const DataEntryForm = () => {
             />
           </Grid>
           <Grid item xs={12} sm={6} lg={8}>
-            <TextField
-              required
-              fullWidth
-              label="Item Name"
-              value={formData.itemName}
-              onChange={(e) => handleChange('itemName', e.target.value)}
+            <Autocomplete
+              options={itemNames}
+              getOptionLabel={(option) => option.name}
+              value={itemNames.find(item => item.name === formData.itemName) || null}
+              onChange={(e, newValue) => handleChange('itemName', newValue?.name || '')}
+              freeSolo // Allows users to enter new item names not in the list
+              renderInput={(params) => (
+                <TextField {...params} label="Item Name" required fullWidth />
+              )}
             />
           </Grid>
 
-          {/* Description */}
+          {/* Rest of the form remains unchanged */}
           <Grid item xs={12}>
             <TextField
               fullWidth
@@ -180,7 +209,6 @@ const DataEntryForm = () => {
             />
           </Grid>
 
-          {/* Form Type and Gate Name - Same Row on Large Screens */}
           <Grid item xs={12} sm={6} lg={4}>
             <FormControl fullWidth required>
               <InputLabel>Form Type</InputLabel>
@@ -195,15 +223,18 @@ const DataEntryForm = () => {
             </FormControl>
           </Grid>
           <Grid item xs={12} sm={6} lg={8}>
-            <TextField
-              fullWidth
-              label="Gate Name"
-              value={formData.gateName}
-              onChange={(e) => handleChange('gateName', e.target.value)}
-            />
-          </Grid>
+          <Autocomplete
+            options={gateNames}
+            getOptionLabel={(option) => option.name}
+            value={gateNames.find(gate => gate.name === formData.gateName) || null}
+            onChange={(e, newValue) => handleChange('gateName', newValue?.name || '')}
+            freeSolo // Allows users to enter new gate names not in the list
+            renderInput={(params) => (
+              <TextField {...params} label="Gate Name" fullWidth />
+            )}
+          />
+        </Grid>
 
-          {/* Quantity, Price, Amount - Same Row on Large Screens */}
           <Grid item xs={12} sm={4} lg={4}>
             <TextField
               fullWidth
@@ -251,7 +282,7 @@ const DataEntryForm = () => {
         </Box>
       </form>
 
-      {/* Customer Management Modal */}
+      {/* Customer Management Modal remains unchanged */}
       <Modal open={openModal} onClose={() => { setOpenModal(false); setEditingCustomer(null); setNewCustomer(''); }}>
         <Box sx={{
           position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
