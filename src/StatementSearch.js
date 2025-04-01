@@ -41,7 +41,7 @@ const StatementSearch = () => {
   // Fetch unpaid orders based on customer name
   const searchOrders = () => {
     if (!customerName.trim()) return;
-
+  
     setLoading(true);
     const ordersQuery = query(
       collection(db, 'orders'),
@@ -49,18 +49,25 @@ const StatementSearch = () => {
       where('customerName', '<=', customerName.trim() + '\uf8ff'),
       where('status', '==', 'unpaid')
     );
-
+  
     const unsubscribe = onSnapshot(ordersQuery, (snapshot) => {
       const ordersData = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
-
+  
+      // Sort orders by date in descending order (latest first)
+      ordersData.sort((a, b) => {
+        const dateA = new Date(a.date);
+        const dateB = new Date(b.date);
+        return dateB - dateA; // Descending order
+      });
+  
       if (ordersData.length > 0) {
         const firstOrder = ordersData[0];
         const totalBalance = ordersData.reduce((sum, order) => 
           sum + (order.amount - order.paidAmount), 0);
-
+  
         setStatementData({
           customer: firstOrder.customerName,
           balance: totalBalance,
@@ -83,7 +90,7 @@ const StatementSearch = () => {
       console.error('Error fetching orders:', error);
       setLoading(false);
     });
-
+  
     return () => unsubscribe();
   };
 
