@@ -4,15 +4,6 @@
   box-sizing: border-box;
 }
 
-body {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
 code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
@@ -26,4 +17,14 @@ code {
 .app {
   height: 100%;
   width: 100%;
+}
+
+@media print {
+  .printable-statement {
+    font-family: "'Noto Sans SC', 'Roboto', 'Arial', sans-serif" !important;
+    visibility: visible !important;
+  }
+  .MuiTypography-root, .MuiTableCell-root {
+    font-family: "'Noto Sans SC', 'Roboto', 'Arial', sans-serif" !important;
+  }
 }

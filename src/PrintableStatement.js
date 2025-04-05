@@ -15,7 +15,7 @@ const PrintableStatement = React.forwardRef((props, ref) => {
   }
 
   return (
-    <div ref={ref}>
+    <div ref={ref} className="printable-statement">
       <Container sx={{ p: 4, '@media print': { p: 2 } }}>
         {/* Header Section */}
         <Box sx={{ position: 'relative', mb: 4 }}>
