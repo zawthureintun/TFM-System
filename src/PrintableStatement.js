@@ -53,7 +53,15 @@ const PrintableStatement = React.forwardRef((props, ref) => {
           <Grid item xs={6}>
             <Box sx={{ p: 2, border: '1px solid #ddd', borderRadius: 1 }}>
               <Typography variant="h6" gutterBottom>Summary</Typography>
-              <Typography>Balance to Collect: <strong>{statementData.balance.toLocaleString()} MMK</strong></Typography>
+              <Typography
+                sx={{
+                  display: 'inline-block',
+                  borderRadius: 1,
+                  color:'error.light',
+                }}
+              >
+               <strong> Balance: {statementData.balance.toLocaleString()} ကျပ်</strong>
+                </Typography>
             </Box>
           </Grid>
         </Grid>

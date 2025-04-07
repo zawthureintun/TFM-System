@@ -3,6 +3,7 @@ import { Box, Tab, Tabs, Typography, Container, Paper, Button } from '@mui/mater
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import PagesIcon from '@mui/icons-material/Pages';
 import { useHistory } from 'react-router-dom';
+import theme from './theme'; // Import your MUI theme
 
 const DataEntryForm = React.lazy(() => import('./DataEntryForm'));
 const OrdersTable = React.lazy(() => import('./OrdersTable'));
