@@ -16,7 +16,7 @@ const PrintableStatement = React.forwardRef((props, ref) => {
 
   return (
     <div ref={ref} className="printable-statement">
-      <Container sx={{ p: 4, '@media print': { p: 2 } }}>
+      <Container sx={{ p: 4, '@media print': { p: 7,m:2 } }}>
         {/* Header Section */}
         <Box sx={{ position: 'relative', mb: 4 }}>
           <Box 
@@ -68,7 +68,7 @@ const PrintableStatement = React.forwardRef((props, ref) => {
 
         {/* Unpaid Orders */}
         <Typography variant="h6" sx={{textAlign:'center'}} gutterBottom>Unpaid Orders</Typography>
-        <TableContainer sx={{ mb: 4 }}>
+        <TableContainer sx={{ mb: 4,mt:2 }}>
           <Table size="small">
             <TableHead>
               <TableRow>
