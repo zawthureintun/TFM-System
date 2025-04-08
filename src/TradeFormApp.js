@@ -9,6 +9,7 @@ const DataEntryForm = React.lazy(() => import('./DataEntryForm'));
 const OrdersTable = React.lazy(() => import('./OrdersTable'));
 const StatementSearch = React.lazy(() => import('./StatementSearch'));
 const PaymentReconcilationSystem = React.lazy(() => import('./PaymentReconcilationSystem'));
+const ProfitLossDashboard = React.lazy(() => import('./ProfitLossDashboard'));
 
 function TabPanel({ children, value, index, ...other }) {
   return (
@@ -106,6 +107,7 @@ const TradeFormApp = () => {
             <Tab label="Orders" />
             <Tab label="Payments" />
             <Tab label="Statements" />
+            <Tab label="Profit/Loss" />
           </Tabs>
         </Box>
 
@@ -131,6 +133,12 @@ const TradeFormApp = () => {
           <TabPanel value={value} index={3}>
             <Paper elevation={0}>
               <StatementSearch />
+            </Paper>
+          </TabPanel>
+
+          <TabPanel value={value} index={4}>
+            <Paper elevation={0}>
+              <ProfitLossDashboard />
             </Paper>
           </TabPanel>
         </React.Suspense>

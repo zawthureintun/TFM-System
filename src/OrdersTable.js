@@ -64,6 +64,8 @@ const OrdersTable = () => {
     quantity: 0,
     price: 0,
     amount: 0,
+    costPrice: 0,
+    costAmount: 0,
     gateName: '',
     formNumber: []
   });
@@ -125,6 +127,8 @@ const OrdersTable = () => {
       quantity: order.quantity || 0,
       price: order.price || 0,
       amount: order.amount || 0,
+      costPrice: order.costPrice || 0,
+      costAmount: order.costAmount || 0,
       gateName: order.gateName || '',
       formNumber: order.formNumber || []
     });
@@ -140,14 +144,16 @@ const OrdersTable = () => {
     const { name, value } = e.target;
     
     // Update amount when quantity or price changes
-    if (name === 'quantity' || name === 'price') {
+    if (name === 'quantity' || name === 'price' || name === 'costPrice') {
       const newData = { ...editFormData, [name]: value };
       const quantity = parseFloat(name === 'quantity' ? value : editFormData.quantity) || 0;
       const price = parseFloat(name === 'price' ? value : editFormData.price) || 0;
+      const costPrice = parseFloat(name === 'costPrice' ? value : editFormData.costPrice) || 0;
       
       setEditFormData({
         ...newData,
-        amount: (quantity * price).toFixed(0)
+        amount: (quantity * price).toFixed(0),
+        costAmount: (quantity * costPrice).toFixed(0)
       });
     } else {
       setEditFormData({
@@ -423,6 +429,15 @@ const OrdersTable = () => {
             <MenuItem value="Phyto">Phyto</MenuItem>
           </Select>
         </FormControl>
+        <TextField
+            label="Gate Name"
+            name="gateName"
+            type="text"
+            fullWidth
+            variant="outlined"
+            value={editFormData.gateName}
+            onChange={handleEditFormChange}
+          />
           <TextField
             label="Quantity"
             name="quantity"
@@ -450,15 +465,25 @@ const OrdersTable = () => {
             value={editFormData.amount}
             InputProps={{ readOnly: true }}
           />
-          <TextField
-            label="Gate Name"
-            name="gateName"
-            type="text"
+            <TextField
+            label="Cost Price"
+            name="costPrice"
+            type="number"
             fullWidth
             variant="outlined"
-            value={editFormData.gateName}
+            value={editFormData.costPrice}
             onChange={handleEditFormChange}
           />
+          <TextField
+            label="Cost Amount"
+            name="costAmount"
+            type="number"
+            fullWidth
+            variant="outlined"
+            value={editFormData.costAmount}
+            InputProps={{ readOnly: true }}
+          />
+       
         </Stack>
       </DialogContent>
       <DialogActions>
