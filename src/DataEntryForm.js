@@ -10,11 +10,13 @@ import { db } from './Firebase';
 const DataEntryForm = () => {
   const [formData, setFormData] = useState({
     date: '', itemName: '', description: '', formType: '', quantity: 1, 
-    price: 0, amount: 0, costPrice: 0,costAmount:0, gateName: '', customerId: '' // Added 'cost' here
+    price: 0, amount: 0, costPrice: 0, costAmount: 0, gateName: '', customerId: ''
   });
   
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
+  
   const [customers, setCustomers] = useState([]);
-  const [itemNames, setItemNames] = useState([]);
+  const [itemNames, setItemNames] = useState(null);
   const [openModal, setOpenModal] = useState(false);
   const [newCustomer, setNewCustomer] = useState('');
   const [editingCustomer, setEditingCustomer] = useState(null);
@@ -22,7 +24,7 @@ const DataEntryForm = () => {
   const [loading, setLoading] = useState(false);
   const [gateNames, setGateNames] = useState([]);
 
-  // Fetch customers and item names on component mount (unchanged)
+  // Fetch customers and item names on component mount
   useEffect(() => {
     const fetchData = async () => {
       const customerSnapshot = await getDocs(collection(db, 'customers'));
@@ -34,12 +36,15 @@ const DataEntryForm = () => {
 
       const ordersSnapshot = await getDocs(collection(db, 'orders'));
       const allItemNames = ordersSnapshot.docs.map(doc => doc.data().itemName);
-      const uniqueItemNames = [...new Set(allItemNames)].map(name => ({ name }));
+      console.log('All Item Names:', allItemNames);
+      const uniqueItemNames = [...new Set(allItemNames)].filter(Boolean).map(name => ({ name }));
       setItemNames(uniqueItemNames);
+      console.log('Unique Item Names:', uniqueItemNames);
 
       const allGateNames = ordersSnapshot.docs.map(doc => doc.data().gateName)
         .filter(name => name);
       const uniqueGateNames = [...new Set(allGateNames)].map(name => ({ name }));
+      console.log('Unique Gate Names:', uniqueGateNames);
       setGateNames(uniqueGateNames);
     };
     fetchData();
@@ -47,6 +52,7 @@ const DataEntryForm = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    console.log('Form Data:', formData);
     if (!formData.date || !formData.itemName || !formData.formType || !formData.customerId) {
       setSnackbar({ open: true, message: 'Please fill out all required fields', severity: 'error' });
       return;
@@ -60,8 +66,8 @@ const DataEntryForm = () => {
         quantity: formData.quantity ? parseFloat(formData.quantity) : 0,
         price: formData.price ? parseFloat(formData.price) : 0,
         amount: formData.amount ? parseFloat(formData.amount) : 0,
-        costPrice: formData.costPrice ? parseFloat(formData.costPrice) : 0, // Added 'cost' to orderData
-        costAmount: formData.costAmount ? parseFloat(formData.costAmount) : 0, // Added 'cost' to orderData
+        costPrice: formData.costPrice ? parseFloat(formData.costPrice) : 0,
+        costAmount: formData.costAmount ? parseFloat(formData.costAmount) : 0,
         createdAt: serverTimestamp(),
         status: 'unpaid',
         paidAmount: 0,
@@ -93,20 +99,27 @@ const DataEntryForm = () => {
       const price = parseFloat(newData.price) || 0;
       const costprice = parseFloat(newData.costPrice) || 0;
       const quantity = parseFloat(newData.quantity) || 0;
-      newData.amount = (price * quantity).toFixed(0); // Amount still calculated from price * quantity
-      newData.costAmount = (parseFloat(newData.costPrice) * quantity).toFixed(0); // Added 'cost' calculation
+      newData.amount = (price * quantity).toFixed(0);
+      newData.costAmount = (costprice * quantity).toFixed(0);
     }
+    console.log('Updated Form Data:', newData);
     setFormData(newData);
   };
 
   const handleClear = () => {
+    // Reset form data
     setFormData({
       date: '', itemName: '', description: '', formType: '', quantity: '', 
-      price: '', amount: '', costPrice: '', costAmount:'',gateName: '', customerId: '' // Added 'cost' to clear
+      price: '', amount: '', costPrice: '', costAmount: '', gateName: '', customerId: ''
     });
+    
+    // Reset Autocomplete selections
+    setSelectedCustomer(null);
+    
+    console.log('Form cleared');
   };
 
-  // Customer management functions (unchanged)
+  // Customer management functions
   const handleAddCustomer = async () => {
     if (!newCustomer) return;
     try {
@@ -147,13 +160,16 @@ const DataEntryForm = () => {
     <Paper elevation={0} sx={{ p: 3, maxWidth: 'xl', mx: 'auto', border:'1px solid #ccc' }}>
       <form onSubmit={handleSubmit}>
         <Grid container spacing={3}>
-          {/* Customer Selection (unchanged) */}
+          {/* Customer Selection */}
           <Grid item xs={12} md={8}>
             <Autocomplete
               options={customers}
               getOptionLabel={(option) => option.name}
-              value={customers.find(c => c.id === formData.customerId) || null}
-              onChange={(e, newValue) => handleChange('customerId', newValue?.id || '')}
+              value={selectedCustomer}
+              onChange={(e, newValue) => {
+                setSelectedCustomer(newValue);
+                handleChange('customerId', newValue?.id || '');
+              }}
               renderInput={(params) => (
                 <TextField {...params} label="Customer Name" required fullWidth />
               )}
@@ -171,7 +187,7 @@ const DataEntryForm = () => {
             </Button>
           </Grid>
 
-          {/* Date and Item Name (unchanged) */}
+          {/* Date and Item Name */}
           <Grid item xs={12} sm={6} lg={4}>
             <TextField
               required
@@ -183,20 +199,31 @@ const DataEntryForm = () => {
               onChange={(e) => handleChange('date', e.target.value)}
             />
           </Grid>
+
           <Grid item xs={12} sm={6} lg={8}>
             <Autocomplete
-              options={itemNames}
-              getOptionLabel={(option) => option.name}
-              value={itemNames.find(item => item.name === formData.itemName) || null}
-              onChange={(e, newValue) => handleChange('itemName', newValue?.name || '')}
+              options={itemNames || []}
+              getOptionLabel={(option) => option.name || ''}
+              onChange={(event, newValue) => handleChange('itemName', newValue?.name || '')}
+              inputValue={formData.itemName}
+              onInputChange={(event, newInputValue) => {
+                handleChange('itemName', newInputValue);
+              }
+              }
               freeSolo
               renderInput={(params) => (
-                <TextField {...params} label="Item Name" required fullWidth />
+                <TextField 
+                  {...params}
+                  label="Item Name"
+                  required
+                  fullWidth
+                  
+                />
               )}
             />
           </Grid>
 
-          {/* Description (unchanged) */}
+          {/* Description */}
           <Grid item xs={12}>
             <TextField
               fullWidth
@@ -208,7 +235,7 @@ const DataEntryForm = () => {
             />
           </Grid>
 
-          {/* Form Type and Gate Name (unchanged) */}
+          {/* Form Type and Gate Name */}
           <Grid item xs={12} sm={6} lg={4}>
             <FormControl fullWidth required>
               <InputLabel>Form Type</InputLabel>
@@ -222,15 +249,26 @@ const DataEntryForm = () => {
               </Select>
             </FormControl>
           </Grid>
+
           <Grid item xs={12} sm={6} lg={8}>
             <Autocomplete
-              options={gateNames}
-              getOptionLabel={(option) => option.name}
-              value={gateNames.find(gate => gate.name === formData.gateName) || null}
-              onChange={(e, newValue) => handleChange('gateName', newValue?.name || '')}
+              options={gateNames || []}
+              getOptionLabel={(option) => option.name || ''}
+              onChange={(e, newValue) => {
+                handleChange('gateName', newValue?.name || '');
+              }}
+              inputValue={formData.gateName}
+              onInputChange={(e, newInputValue) => {
+                handleChange('gateName', newInputValue);
+              }}
               freeSolo
               renderInput={(params) => (
-                <TextField {...params} label="Gate Name" fullWidth />
+                <TextField 
+                  {...params} 
+                  label="Gate Name" 
+                  required
+                  fullWidth
+                />
               )}
             />
           </Grid>
@@ -270,7 +308,7 @@ const DataEntryForm = () => {
               type="number"
               label="Cost Price"
               value={formData.costPrice}
-              onChange={(e) => handleChange('costPrice', e.target.value)} // Added handler for 'cost'
+              onChange={(e) => handleChange('costPrice', e.target.value)}
             />
           </Grid>
           <Grid item xs={12} sm={3} lg={4}>
@@ -279,7 +317,6 @@ const DataEntryForm = () => {
               type="number"
               label="Cost Amount"
               value={formData.costAmount}
-              onChange={(e) => handleChange('costAmount', e.target.value)} // Added handler for 'cost'
               InputProps={{ readOnly: true }}
             />
           </Grid>
@@ -303,7 +340,7 @@ const DataEntryForm = () => {
         </Box>
       </form>
 
-      {/* Customer Management Modal (unchanged) */}
+      {/* Customer Management Modal */}
       <Modal open={openModal} onClose={() => { setOpenModal(false); setEditingCustomer(null); setNewCustomer(''); }}>
         <Box sx={{
           position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
