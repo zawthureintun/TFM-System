@@ -26,6 +26,7 @@ import {
   Alert,
   InputAdornment,
   TableContainer,
+  Autocomplete
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
@@ -40,7 +41,10 @@ import {
   updateDoc, 
   deleteDoc,
   query,
-  orderBy 
+  orderBy,
+  serverTimestamp,
+  where,
+  addDoc
 } from 'firebase/firestore';
 import { TablePagination } from '@mui/material';
 import {format} from 'date-fns';
@@ -64,11 +68,14 @@ const OrdersTable = () => {
     quantity: 0,
     price: 0,
     amount: 0,
-    costPrice: 0,
-    costAmount: 0,
     gateName: '',
-    formNumber: []
+    formNumber: [],
+    payees: [
+      { payeeName: '', costPrice: 0, quantity: 0, costAmount: 0 },
+      { payeeName: '', costPrice: 0, quantity: 0, costAmount: 0 },
+    ],
   });
+  const [payeeNames, setPayeeNames] = useState([]);
   const [snackbar, setSnackbar] = useState({
     open: false,
     message: '',
@@ -100,6 +107,14 @@ const OrdersTable = () => {
         }));
         
         setOrders(ordersData);
+
+        // Fetch payee names
+        const payeeSnapshot = await getDocs(collection(db, 'payees'));
+        const allPayeeNames = payeeSnapshot.docs.map((doc) => doc.data().payeeName);
+        const uniquePayeeNames = [...new Set(allPayeeNames)]
+          .filter(Boolean)
+          .map((name) => ({ name }));
+        setPayeeNames(uniquePayeeNames);
       } catch (error) {
         console.error("Error fetching orders: ", error);
         setSnackbar({
@@ -127,10 +142,20 @@ const OrdersTable = () => {
       quantity: order.quantity || 0,
       price: order.price || 0,
       amount: order.amount || 0,
-      costPrice: order.costPrice || 0,
-      costAmount: order.costAmount || 0,
       gateName: order.gateName || '',
-      formNumber: order.formNumber || []
+      formNumber: order.formNumber || [],
+      payees: order.payees && order.payees.length > 0
+        ? order.payees.map((payee) => ({
+            id: payee.id,
+            payeeName: payee.payeeName || '',
+            costPrice: payee.costPrice || 0,
+            quantity: payee.quantity || 0,
+            costAmount: payee.costAmount || 0,
+          }))
+        : [
+            { payeeName: '', costPrice: 0, quantity: 0, costAmount: 0 },
+            { payeeName: '', costPrice: 0, quantity: 0, costAmount: 0 },
+          ],
     });
     setIsEditDialogOpen(true);
   };
@@ -144,16 +169,14 @@ const OrdersTable = () => {
     const { name, value } = e.target;
     
     // Update amount when quantity or price changes
-    if (name === 'quantity' || name === 'price' || name === 'costPrice') {
+    if (name === 'quantity' || name === 'price') {
       const newData = { ...editFormData, [name]: value };
       const quantity = parseFloat(name === 'quantity' ? value : editFormData.quantity) || 0;
       const price = parseFloat(name === 'price' ? value : editFormData.price) || 0;
-      const costPrice = parseFloat(name === 'costPrice' ? value : editFormData.costPrice) || 0;
       
       setEditFormData({
         ...newData,
         amount: (quantity * price).toFixed(0),
-        costAmount: (quantity * costPrice).toFixed(0)
       });
     } else {
       setEditFormData({
@@ -163,46 +186,126 @@ const OrdersTable = () => {
     }
   };
   
+  const handlePayeeChange = (index, field, value) => {
+    const newPayees = [...editFormData.payees];
+    newPayees[index] = { ...newPayees[index], [field]: value };
+    
+    if (field === 'costPrice' || field === 'quantity') {
+      const costPrice = parseFloat(newPayees[index].costPrice) || 0;
+      const quantity = parseFloat(newPayees[index].quantity) || 0;
+      newPayees[index].costAmount = (costPrice * quantity).toFixed(0);
+    }
+    
+    setEditFormData({ ...editFormData, payees: newPayees });
+  };
+
+  const handleAddPayee = () => {
+    setEditFormData({
+      ...editFormData,
+      payees: [
+        ...editFormData.payees,
+        { payeeName: '', costPrice: 0, quantity: 0, costAmount: 0 },
+      ],
+    });
+  };
+
+  const handleRemovePayee = (index) => {
+    const newPayees = editFormData.payees.filter((_, i) => i !== index);
+    setEditFormData({ ...editFormData, payees: newPayees });
+  };
+
   const handleEditFormSubmit = async () => {
     if (selectedOrder) {
       setLoading(true);
       try {
         const orderRef = doc(db, 'orders', selectedOrder.id);
         
-        // Convert string values to numbers for Firestore
+        // Calculate totalPayeeCost
+        const totalPayeeCost = editFormData.payees.reduce((total, payee) => {
+          if (payee.payeeName && payee.costPrice && payee.quantity) {
+            const costPrice = parseFloat(payee.costPrice) || 0;
+            const quantity = parseFloat(payee.quantity) || 0;
+            return total + (costPrice * quantity);
+          }
+          return total;
+        }, 0);
+
+        // Prepare order data
         const updateData = {
           ...editFormData,
           quantity: parseFloat(editFormData.quantity) || 0,
           price: parseFloat(editFormData.price) || 0,
-          amount: parseFloat(editFormData.amount) || 0
+          amount: parseFloat(editFormData.amount) || 0,
+          totalPayeeCost,
         };
         
-        // Remove the id field before updating
-        const { id, ...dataToUpdate } = updateData;
+        // Remove id and payees from order update (payees are stored separately)
+        const { id, payees, ...dataToUpdate } = updateData;
         
+        // Update order in Firestore
         await updateDoc(orderRef, dataToUpdate);
-        
-        // Update local state
-        setOrders(orders.map(order => {
-          if (order.id === selectedOrder.id) {
-            return { ...updateData, id: selectedOrder.id };
+
+        // Update payee data
+        // First, delete existing payees for this order
+        const payeesQuery = query(
+          collection(db, 'payees'),
+          where('orderId', '==', selectedOrder.id)
+        );
+        const payeesSnapshot = await getDocs(payeesQuery);
+        for (const payeeDoc of payeesSnapshot.docs) {
+          await deleteDoc(doc(db, 'payees', payeeDoc.id));
+        }
+
+        // Add new payees
+        for (const payee of editFormData.payees) {
+          if (payee.payeeName && payee.costPrice && payee.quantity) {
+            await addDoc(collection(db, 'payees'), {
+              orderId: selectedOrder.id,
+              payeeName: payee.payeeName,
+              costPrice: parseFloat(payee.costPrice) || 0,
+              quantity: parseFloat(payee.quantity) || 0,
+              costAmount: parseFloat(payee.costAmount) || 0,
+              createdAt: serverTimestamp(),
+              status: 'unpaid',
+              paidAmount: 0,
+              orderDate: editFormData.date,
+            });
           }
-          return order;
-        }));
+        }
+
+        // Update local state
+        setOrders(
+          orders.map((order) =>
+            order.id === selectedOrder.id
+              ? { ...updateData, id: selectedOrder.id, payees: editFormData.payees }
+              : order
+          )
+        );
+
+        // Update payeeNames if new payees were added
+        const newPayeeNames = editFormData.payees
+          .map((payee) => payee.payeeName)
+          .filter((name) => name && !payeeNames.some((p) => p.name === name));
+        if (newPayeeNames.length > 0) {
+          setPayeeNames([
+            ...payeeNames,
+            ...newPayeeNames.map((name) => ({ name })),
+          ]);
+        }
         
         setSnackbar({
           open: true,
           message: 'Order updated successfully!',
-          severity: 'success'
+          severity: 'success',
         });
         
         handleCloseEditDialog();
       } catch (error) {
-        console.error("Error updating order: ", error);
+        console.error('Error updating order: ', error);
         setSnackbar({
           open: true,
           message: `Error updating order: ${error.message}`,
-          severity: 'error'
+          severity: 'error',
         });
       } finally {
         setLoading(false);
@@ -374,7 +477,7 @@ const OrdersTable = () => {
   );
   
   const renderEditDialog = () => (
-    <Dialog open={isEditDialogOpen} onClose={handleCloseEditDialog} maxWidth="sm" fullWidth>
+    <Dialog open={isEditDialogOpen} onClose={handleCloseEditDialog} maxWidth="md" fullWidth>
       <DialogTitle>Edit Order</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
@@ -415,21 +518,21 @@ const OrdersTable = () => {
             value={editFormData.description}
             onChange={handleEditFormChange}
           />
-         <FormControl fullWidth variant="outlined">
-          <InputLabel id="form-type-label">Form Type</InputLabel>
-          <Select
-            labelId="form-type-label"
-            id="form-type"
-            name="formType"
-            value={editFormData.formType}
-            onChange={handleEditFormChange}
-            label="Form Type"
-          >
-            <MenuItem value="Form-E">Form E</MenuItem>
-            <MenuItem value="Phyto">Phyto</MenuItem>
-          </Select>
-        </FormControl>
-        <TextField
+          <FormControl fullWidth variant="outlined">
+            <InputLabel id="form-type-label">Form Type</InputLabel>
+            <Select
+              labelId="form-type-label"
+              id="form-type"
+              name="formType"
+              value={editFormData.formType}
+              onChange={handleEditFormChange}
+              label="Form Type"
+            >
+              <MenuItem value="Form-E">Form E</MenuItem>
+              <MenuItem value="Phyto">Phyto</MenuItem>
+            </Select>
+          </FormControl>
+          <TextField
             label="Gate Name"
             name="gateName"
             type="text"
@@ -465,32 +568,79 @@ const OrdersTable = () => {
             value={editFormData.amount}
             InputProps={{ readOnly: true }}
           />
-            <TextField
-            label="Cost Price"
-            name="costPrice"
-            type="number"
-            fullWidth
+          <Typography variant="subtitle1" sx={{ mt: 2 }}>
+            Payee Details
+          </Typography>
+          {editFormData.payees.map((payee, index) => (
+            <Box key={index} sx={{ mb: 2, border: '1px solid #eee', p: 2, borderRadius: 1 }}>
+              <Stack direction="row" spacing={2} alignItems="center">
+                <Autocomplete
+                  options={payeeNames}
+                  getOptionLabel={(option) => option.name || ''}
+                  value={payeeNames.find((p) => p.name === payee.payeeName) || null}
+                  onChange={(event, newValue) =>
+                    handlePayeeChange(index, 'payeeName', newValue?.name || '')
+                  }
+                  inputValue={payee.payeeName}
+                  onInputChange={(event, newInputValue) => {
+                    handlePayeeChange(index, 'payeeName', newInputValue);
+                  }}
+                  freeSolo
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      label={`Payee ${index + 1} Name`}
+                      fullWidth
+                      sx={{ minWidth: 200 }}
+                    />
+                  )}
+                />
+                <TextField
+                  label="Cost Price"
+                  type="number"
+                  value={payee.costPrice}
+                  onChange={(e) => handlePayeeChange(index, 'costPrice', e.target.value)}
+                  sx={{ width: 150 }}
+                />
+                <TextField
+                  label="Quantity"
+                  type="number"
+                  value={payee.quantity}
+                  onChange={(e) => handlePayeeChange(index, 'quantity', e.target.value)}
+                  sx={{ width: 150 }}
+                />
+                <TextField
+                  label="Cost Amount"
+                  type="number"
+                  value={payee.costAmount}
+                  InputProps={{ readOnly: true }}
+                  sx={{ width: 150 }}
+                />
+                <IconButton
+                  onClick={() => handleRemovePayee(index)}
+                  color="error"
+                  disabled={editFormData.payees.length <= 1}
+                >
+                  <DeleteIcon />
+                </IconButton>
+              </Stack>
+            </Box>
+          ))}
+          <Button
+            startIcon={<AddIcon />}
+            onClick={handleAddPayee}
             variant="outlined"
-            value={editFormData.costPrice}
-            onChange={handleEditFormChange}
-          />
-          <TextField
-            label="Cost Amount"
-            name="costAmount"
-            type="number"
-            fullWidth
-            variant="outlined"
-            value={editFormData.costAmount}
-            InputProps={{ readOnly: true }}
-          />
-       
+            size="small"
+          >
+            Add Payee
+          </Button>
         </Stack>
       </DialogContent>
       <DialogActions>
         <Button onClick={handleCloseEditDialog} color="inherit">
           Cancel
         </Button>
-        <Button 
+        <Button
           onClick={handleEditFormSubmit}
           variant="contained"
           color="primary"
@@ -593,149 +743,161 @@ const OrdersTable = () => {
   );
 
   return (
-    <Paper elevation={0} sx={{ p: 3, maxWidth: 'xl', mx: 'auto',border:'1px solid #ccc' }}>
-       <Typography 
-            variant="h4" 
-            component="h1" 
-            mb={3}
-            sx={{ 
-              fontWeight: 'bold',
-              fontSize: { xs: '1.5rem', sm: '2.125rem' }
-            }}
-          >
-            Orders List
-          </Typography>
-          {/* Search and Buttons */}
-          <Box sx={{ 
-            display: 'flex', 
-            flexDirection: { xs: 'column', sm: 'column' },
-            gap: 2,
-            width: { xs: '100%', sm: 'auto' }
+    <Paper elevation={0} sx={{ p: 3, maxWidth: 'xl', mx: 'auto', border: '1px solid #ccc' }}>
+      <Typography
+        variant="h4"
+        component="h1"
+        mb={3}
+        sx={{
+          fontWeight: 'bold',
+          fontSize: { xs: '1.5rem', sm: '2.125rem' },
+        }}
+      >
+        Orders List
+      </Typography>
+      {/* Search and Buttons */}
+      <Box
+        sx={{
+          display: 'flex',
+          flexDirection: { xs: 'column', sm: 'column' },
+          gap: 2,
+          width: { xs: '100%', sm: 'auto' },
+        }}
+        mb={3}
+      >
+        <TextField
+          placeholder="Search customers..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          size="small"
+          variant="outlined"
+          sx={{
+            minWidth: { xs: '100%', sm: 250 },
           }}
-          mb={3}>
-              
-            <TextField
-              placeholder="Search customers..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              size="small"
+          InputProps={{
+            startAdornment: (
+              <InputAdornment position="start">
+                <SearchIcon />
+              </InputAdornment>
+            ),
+          }}
+        />
+        <Box
+          sx={{
+            display: 'flex',
+            gap: 1,
+            flexWrap: 'wrap',
+            justifyContent: { xs: 'flex-start', sm: 'flex-end' },
+          }}
+        >
+          {[
+            { icon: <AddIcon />, label: 'Add Form Numbers', onClick: handleOpenDialog, color: 'primary' },
+            { icon: <EditIcon />, label: 'Edit Order', onClick: handleEditOrder, color: 'primary' },
+            { icon: <DeleteIcon />, label: 'Delete Order', onClick: handleOpenDeleteDialog, color: 'error' },
+          ].map((btn, index) => (
+            <Button
+              key={index}
+              startIcon={btn.icon}
+              onClick={() => {
+                const selectedOrder = orders.find((order) => order.id === selectedOrderId);
+                if (selectedOrder) btn.onClick(selectedOrder);
+              }}
               variant="outlined"
-              sx={{ 
-                minWidth: { xs: '100%', sm: 250 }
+              color={btn.color}
+              disabled={!selectedOrderId || (btn.label === 'Delete Order' && loading)}
+              sx={{
+                minWidth: { xs: 120, sm: 'auto' },
               }}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon />
-                  </InputAdornment>
-                ),
-              }}
-            />
-            
-            <Box sx={{ 
-              display: 'flex', 
-              gap: 1,
-              flexWrap: 'wrap',
-              justifyContent: { xs: 'flex-start', sm: 'flex-end' }
-            }}>
-              {[
-                { icon: <AddIcon />, label: 'Add Form Numbers', onClick: handleOpenDialog, color: 'primary' },
-                { icon: <EditIcon />, label: 'Edit Order', onClick: handleEditOrder, color: 'primary' },
-                { icon: <DeleteIcon />, label: 'Delete Order', onClick: handleOpenDeleteDialog, color: 'error' },
-              ].map((btn, index) => (
-                <Button
-                  key={index}
-                  startIcon={btn.icon}
-                  onClick={() => {
-                    const selectedOrder = orders.find(order => order.id === selectedOrderId);
-                    if (selectedOrder) btn.onClick(selectedOrder);
-                  }}
-                  variant="outlined"
-                  color={btn.color}
-                  disabled={!selectedOrderId || (btn.label === 'Delete Order' && loading)}
-                  sx={{ 
-                    minWidth: { xs: 120, sm: 'auto' }
-                  }}
-                >
-                  {btn.label}
-                </Button>
-              ))}
-            </Box>
+            >
+              {btn.label}
+            </Button>
+          ))}
+        </Box>
+      </Box>
+      {/* Table Section */}
+      <Paper elevation={0} sx={{ width: '100%', overflow: 'hidden' }}>
+        {loading && orders.length === 0 ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+            <CircularProgress />
           </Box>
-  
-        {/* Table Section */}
-        <Paper elevation={0} sx={{ 
-          width: '100%', 
-          overflow: 'hidden'
-        }}>
-          {loading && orders.length === 0 ? (
-            <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
-              <CircularProgress />
-            </Box>
-          ) : (
-            <TableContainer sx={{ maxHeight: 600 }}>
-              <Table stickyHeader sx={{ minWidth: { xs: 650, md: 1200 } }}>
-                <TableHead>
-                  <TableRow>
-                    {[
-                      'Date', 'Customer', 'Item', 'Description', 
-                      'Form Type', 'Qty', 'Price', 'Amount', 'Form Numbers'
-                    ].map((header) => (
-                      <TableCell
-                        key={header}
-                        sx={{ 
-                          backgroundColor: 'grey.100',
-                          fontWeight: 'bold',
-                          py: 2
+        ) : (
+          <TableContainer sx={{ maxHeight: 600 }}>
+            <Table stickyHeader sx={{ minWidth: { xs: 650, md: 1200 } }}>
+              <TableHead>
+                <TableRow>
+                  {[
+                    'Date',
+                    'Customer',
+                    'Item',
+                    'Description',
+                    'Form Type',
+                    'Qty',
+                    'Price',
+                    'Amount',
+                    'Form Numbers',
+                  ].map((header) => (
+                    <TableCell
+                      key={header}
+                      sx={{
+                        backgroundColor: 'grey.100',
+                        fontWeight: 'bold',
+                        py: 2,
+                      }}
+                    >
+                      {header}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {filteredOrders.length > 0 ? (
+                  filteredOrders
+                    .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
+                    .map((order) => (
+                      <TableRow
+                        key={order.id}
+                        hover
+                        onClick={() => setSelectedOrderId(order.id)}
+                        selected={selectedOrderId === order.id}
+                        sx={{
+                          cursor: 'pointer',
+                          '&:hover': { backgroundColor: 'grey.50' },
                         }}
                       >
-                        {header}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {filteredOrders.length > 0 ? (
-                    filteredOrders
-                      .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
-                      .map((order) => (
-                        <TableRow
-                          key={order.id}
-                          hover
-                          onClick={() => setSelectedOrderId(order.id)}
-                          selected={selectedOrderId === order.id}
-                          sx={{ 
-                            cursor: 'pointer',
-                            '&:hover': { backgroundColor: 'grey.50' }
+                        <TableCell>{format(new Date(order.date), 'dd-MM-yyyy')}</TableCell>
+                        <TableCell>{order.customerName}</TableCell>
+                        <TableCell>{order.itemName}</TableCell>
+                        <TableCell
+                          sx={{
+                            maxWidth: 200,
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
                           }}
                         >
-                          <TableCell>{format(new Date(order.date),"dd-MM-yyyy")}</TableCell>
-                          <TableCell>{order.customerName}</TableCell>
-                          <TableCell>{order.itemName}</TableCell>
-                          <TableCell sx={{ maxWidth: 200, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {order.description}
-                          </TableCell>
-                          <TableCell>{order.formType}</TableCell>
-                          <TableCell>{order.quantity}</TableCell>
-                          <TableCell>{order.price?.toLocaleString()}</TableCell>
-                          <TableCell>{order.amount?.toLocaleString()}</TableCell>
-                          <TableCell>
-                            {Array.isArray(order.formNumber) ? order.formNumber.join(', ') : order.formNumber}
-                          </TableCell>
-                        </TableRow>
-                      ))
-                  ) : (
-                    <TableRow>
-                      <TableCell colSpan={9} align="center" sx={{ py: 4 }}>
-                        <Typography color="text.secondary">
-                          No orders found
-                        </Typography>
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-              <TablePagination
+                          {order.description}
+                        </TableCell>
+                        <TableCell>{order.formType}</TableCell>
+                        <TableCell>{order.quantity}</TableCell>
+                        <TableCell>{order.price?.toLocaleString()}</TableCell>
+                        <TableCell>{order.amount?.toLocaleString()}</TableCell>
+                        <TableCell>
+                          {Array.isArray(order.formNumber)
+                            ? order.formNumber.join(', ')
+                            : order.formNumber}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                ) : (
+                  <TableRow>
+                    <TableCell colSpan={9} align="center" sx={{ py: 4 }}>
+                      <Typography color="text.secondary">No orders found</Typography>
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+            <TablePagination
               rowsPerPageOptions={[5, 10, 25, 50]}
               component="div"
               count={filteredOrders.length}
@@ -743,37 +905,35 @@ const OrdersTable = () => {
               page={page}
               onPageChange={handleChangePage}
               onRowsPerPageChange={handleChangeRowsPerPage}
-              sx={{ 
+              sx={{
                 '.MuiTablePagination-toolbar': {
-                  py: 1
-                }
+                  py: 1,
+                },
               }}
             />
-            </TableContainer>
-          )}
-        </Paper>
-  
-        {/* Dialogs and Snackbar */}
-        {renderDialog()}
-        {renderEditDialog()}
-        {renderDeleteDialog()}
-        <Snackbar
-          open={snackbar.open}
-          autoHideDuration={6000}
-          onClose={handleCloseSnackbar}
-          anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-        >
-          <Alert
-            onClose={handleCloseSnackbar}
-            severity={snackbar.severity}
-            sx={{ width: '100%', borderRadius: '8px' }}
-            elevation={6}
-          >
-            {snackbar.message}
-          </Alert>
-        </Snackbar>
-      
+          </TableContainer>
+        )}
       </Paper>
+      {/* Dialogs and Snackbar */}
+      {renderDialog()}
+      {renderEditDialog()}
+      {renderDeleteDialog()}
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={6000}
+        onClose={handleCloseSnackbar}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert
+          onClose={handleCloseSnackbar}
+          severity={snackbar.severity}
+          sx={{ width: '100%', borderRadius: '8px' }}
+          elevation={6}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
+    </Paper>
   );
 };
 

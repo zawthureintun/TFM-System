@@ -48,7 +48,7 @@ const ProfitLossDashboard = () => {
 
   // Calculate summary metrics
   const totalRevenue = orders.reduce((sum, order) => sum + (order.amount || 0), 0);
-  const totalCosts = orders.reduce((sum, order) => sum + (order.costAmount || 0), 0);
+  const totalCosts = orders.reduce((sum, order) => sum + (order.totalPayeeCost || 0), 0);
   const netProfitLoss = totalRevenue - totalCosts;
   const profitMargin = totalRevenue ? (netProfitLoss / totalRevenue) * 100 : 0;
 
@@ -68,12 +68,12 @@ const ProfitLossDashboard = () => {
     { field: "quantity", headerName: "Qty", width: 80 },
     { field: "price", headerName: "Price", width: 100 },
     { field: "amount", headerName: "Total Amount", width: 150 },
-    { field: "costAmount", headerName: "Total Cost", width: 120 },
+    { field: "totalPayeeCost", headerName: "Total Cost", width: 120 },
     {
       field: "netProfitLoss",
       headerName: "Net Profit/Loss",
       width: 130,
-      valueGetter: (params) => params.row.amount - params.row.costAmount,
+      valueGetter: (params) => params.row.amount - params.row.totalPayeeCost,
     },
   ];
 

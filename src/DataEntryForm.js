@@ -4,17 +4,20 @@ import {
   Snackbar, Alert, Paper, Modal, Typography, IconButton, Autocomplete
 } from '@mui/material';
 import { Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon } from '@mui/icons-material';
-import { getFirestore, collection, addDoc, getDocs, updateDoc, deleteDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, getDocs, updateDoc, deleteDoc, doc, serverTimestamp,Timestamp } from 'firebase/firestore';
 import { db } from './Firebase';
 
 const DataEntryForm = () => {
   const [formData, setFormData] = useState({
     date: '', itemName: '', description: '', formType: '', quantity: 1, 
-    price: 0, amount: 0, costPrice: 0, costAmount: 0, gateName: '', customerId: ''
+    price: 0, amount: 0, gateName: '', customerId: '',
+    payees: [
+      { payeeName: '', costPrice: 0, quantity: 1, costAmount: 0 },
+      { payeeName: '', costPrice: 0, quantity: 1, costAmount: 0 }
+    ]
   });
   
   const [selectedCustomer, setSelectedCustomer] = useState(null);
-  
   const [customers, setCustomers] = useState([]);
   const [itemNames, setItemNames] = useState(null);
   const [openModal, setOpenModal] = useState(false);
@@ -23,6 +26,7 @@ const DataEntryForm = () => {
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const [loading, setLoading] = useState(false);
   const [gateNames, setGateNames] = useState([]);
+  const [payeeNames, setPayeeNames] = useState([]);
 
   // Fetch customers and item names on component mount
   useEffect(() => {
@@ -46,6 +50,12 @@ const DataEntryForm = () => {
       const uniqueGateNames = [...new Set(allGateNames)].map(name => ({ name }));
       console.log('Unique Gate Names:', uniqueGateNames);
       setGateNames(uniqueGateNames);
+
+      // Fetch payee names
+    const payeeSnapshot = await getDocs(collection(db, 'payees'));
+    const allPayeeNames = payeeSnapshot.docs.map(doc => doc.data().payeeName);
+    const uniquePayeeNames = [...new Set(allPayeeNames)].filter(Boolean).map(name => ({ name }));
+    setPayeeNames(uniquePayeeNames);
     };
     fetchData();
   }, []);
@@ -60,14 +70,22 @@ const DataEntryForm = () => {
     
     setLoading(true);
     try {
+      const totalPayeeCost = formData.payees.reduce((total, payee) => {
+        if (payee.payeeName && payee.costPrice && payee.quantity) {
+          const costPrice = parseFloat(payee.costPrice) || 0;
+          const quantity = parseFloat(payee.quantity) || 0;
+          return total + (costPrice * quantity);
+        }
+        return total;
+      }, 0);
+
       const orderData = {
         ...formData,
         customerName: customers.find(c => c.id === formData.customerId)?.name || '',
         quantity: formData.quantity ? parseFloat(formData.quantity) : 0,
         price: formData.price ? parseFloat(formData.price) : 0,
         amount: formData.amount ? parseFloat(formData.amount) : 0,
-        costPrice: formData.costPrice ? parseFloat(formData.costPrice) : 0,
-        costAmount: formData.costAmount ? parseFloat(formData.costAmount) : 0,
+        totalPayeeCost,
         createdAt: serverTimestamp(),
         status: 'unpaid',
         paidAmount: 0,
@@ -75,6 +93,23 @@ const DataEntryForm = () => {
       };
       
       const docRef = await addDoc(collection(db, 'orders'), orderData);
+
+      // Save payee data
+      for (const payee of formData.payees) {
+        if (payee.payeeName && payee.costPrice && payee.quantity) {
+          await addDoc(collection(db, 'payees'), {
+            orderId: docRef.id,
+            payeeName: payee.payeeName,
+            costPrice: parseFloat(payee.costPrice) || 0,
+            quantity: parseFloat(payee.quantity) || 0,
+            costAmount: parseFloat(payee.costAmount) || 0,
+            createdAt: serverTimestamp(),
+            status:'unpaid',
+            paidAmount: 0,
+            orderDate: formData.date,
+          });
+        }
+      }
       
       if (!itemNames.some(item => item.name === formData.itemName)) {
         setItemNames([...itemNames, { name: formData.itemName }]);
@@ -83,6 +118,13 @@ const DataEntryForm = () => {
       if (formData.gateName && !gateNames.some(gate => gate.name === formData.gateName)) {
         setGateNames([...gateNames, { name: formData.gateName }]);
       }
+
+      // Update payee names
+      formData.payees.forEach(payee => {
+        if (payee.payeeName && !payeeNames.some(p => p.name === payee.payeeName)) {
+          setPayeeNames([...payeeNames, { name: payee.payeeName }]);
+        }
+      });
       
       setSnackbar({ open: true, message: 'Order saved successfully!', severity: 'success' });
       handleClear();
@@ -95,7 +137,7 @@ const DataEntryForm = () => {
 
   const handleChange = (field, value) => {
     const newData = { ...formData, [field]: value };
-    if (field === 'price' || field === 'quantity' || field === 'costPrice') {
+    if (field === 'price' || field === 'quantity') {
       const price = parseFloat(newData.price) || 0;
       const costprice = parseFloat(newData.costPrice) || 0;
       const quantity = parseFloat(newData.quantity) || 0;
@@ -110,7 +152,11 @@ const DataEntryForm = () => {
     // Reset form data
     setFormData({
       date: '', itemName: '', description: '', formType: '', quantity: '', 
-      price: '', amount: '', costPrice: '', costAmount: '', gateName: '', customerId: ''
+      price: '', amount: '', gateName: '', customerId: '',
+      payees: [
+        { payeeName: '', costPrice: 0, quantity: 0, costAmount: 0 },
+        { payeeName: '', costPrice: 0, quantity: 0, costAmount: 0 }
+      ]
     });
     
     // Reset Autocomplete selections
@@ -154,6 +200,19 @@ const DataEntryForm = () => {
     } catch (error) {
       setSnackbar({ open: true, message: `Error: ${error.message}`, severity: 'error' });
     }
+  };
+
+  const handlePayeeChange = (index, field, value) => {
+    const newPayees = [...formData.payees];
+    newPayees[index] = { ...newPayees[index], [field]: value };
+    
+    if (field === 'costPrice' || field === 'quantity') {
+      const costPrice = parseFloat(newPayees[index].costPrice) || 0;
+      const quantity = parseFloat(newPayees[index].quantity) || 0;
+      newPayees[index].costAmount = (costPrice * quantity).toFixed(0);
+    }
+    
+    setFormData({ ...formData, payees: newPayees });
   };
 
   return (
@@ -302,24 +361,60 @@ const DataEntryForm = () => {
               InputProps={{ readOnly: true }}
             />
           </Grid>
-          <Grid item xs={12} sm={3} lg={4}>
-            <TextField
-              fullWidth
-              type="number"
-              label="Cost Price"
-              value={formData.costPrice}
-              onChange={(e) => handleChange('costPrice', e.target.value)}
-            />
           </Grid>
-          <Grid item xs={12} sm={3} lg={4}>
-            <TextField
-              fullWidth
-              type="number"
-              label="Cost Amount"
-              value={formData.costAmount}
-              InputProps={{ readOnly: true }}
-            />
-          </Grid>
+
+          <Grid item xs={12}>
+          <Typography variant="subtitle1" sx={{ mb: 2 }}>Payee Details</Typography>
+          {formData.payees.map((payee, index) => (
+            <Grid container spacing={2} key={index} sx={{ mb: 2 }}>
+              <Grid item xs={12} sm={3}>
+                <Autocomplete
+                  options={payeeNames}
+                  getOptionLabel={(option) => option.name || ''}
+                  onChange={(event, newValue) => handlePayeeChange(index, 'payeeName', newValue?.name || '')}
+                  inputValue={payee.payeeName}
+                  onInputChange={(event, newInputValue) => {
+                    handlePayeeChange(index, 'payeeName', newInputValue);
+                  }}
+                  freeSolo
+                  renderInput={(params) => (
+                    <TextField 
+                      {...params}
+                      label={`Payee ${index + 1} Name`}
+                      fullWidth
+                    />
+                  )}
+                />
+              </Grid>
+              <Grid item xs={12} sm={3}>
+                <TextField
+                  fullWidth
+                  type="number"
+                  label="Cost Price"
+                  value={payee.costPrice}
+                  onChange={(e) => handlePayeeChange(index, 'costPrice', e.target.value)}
+                />
+              </Grid>
+              <Grid item xs={12} sm={3}>
+                <TextField
+                  fullWidth
+                  type="number"
+                  label="Quantity"
+                  value={payee.quantity}
+                  onChange={(e) => handlePayeeChange(index, 'quantity', e.target.value)}
+                />
+              </Grid>
+              <Grid item xs={12} sm={3}>
+                <TextField
+                  fullWidth
+                  type="number"
+                  label="Cost Amount"
+                  value={payee.costAmount}
+                  InputProps={{ readOnly: true }}
+                />
+              </Grid>
+            </Grid>
+          ))}
         </Grid>
 
         <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 2, mt: 3 }}>
@@ -338,6 +433,7 @@ const DataEntryForm = () => {
             {loading ? 'Saving...' : 'Save Order'}
           </Button>
         </Box>
+       
       </form>
 
       {/* Customer Management Modal */}
