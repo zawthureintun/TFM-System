@@ -435,31 +435,43 @@ const OrdersTable = () => {
 
   // Handle delete order
   const handleDeleteOrder = async () => {
-  setLoading(true);
-  try {
-    const orderRef = doc(db, 'orders', selectedOrder.id);
-    await deleteDoc(orderRef);
-    
-    setOrders(orders.filter(order => order.id !== selectedOrder.id));
-    
-    setSnackbar({
-      open: true,
-      message: 'Order deleted successfully!',
-      severity: 'success'
-    });
-    
-    handleCloseDeleteDialog();
-  } catch (error) {
-    console.error("Error deleting order: ", error);
-    setSnackbar({
-      open: true,
-      message: `Error deleting order: ${error.message}`,
-      severity: 'error'
-    });
-  } finally {
-    setLoading(false);
-  }
-};
+    setLoading(true);
+    try {
+      const orderRef = doc(db, 'orders', selectedOrder.id);
+  
+      // Delete related payee records
+      const payeesQuery = query(
+        collection(db, 'payees'),
+        where('orderId', '==', selectedOrder.id)
+      );
+      const payeesSnapshot = await getDocs(payeesQuery);
+      for (const payeeDoc of payeesSnapshot.docs) {
+        await deleteDoc(doc(db, 'payees', payeeDoc.id));
+      }
+  
+      // Delete the order
+      await deleteDoc(orderRef);
+  
+      setOrders(orders.filter(order => order.id !== selectedOrder.id));
+  
+      setSnackbar({
+        open: true,
+        message: 'Order and related payee records deleted successfully!',
+        severity: 'success',
+      });
+  
+      handleCloseDeleteDialog();
+    } catch (error) {
+      console.error("Error deleting order: ", error);
+      setSnackbar({
+        open: true,
+        message: `Error deleting order: ${error.message}`,
+        severity: 'error',
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Handle snackbar close
   const handleCloseSnackbar = () => {
