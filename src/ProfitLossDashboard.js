@@ -83,13 +83,10 @@ const ProfitLossDashboard = () => {
 
   return (
     <LocalizationProvider dateAdapter={AdapterDateFns}>
-      <div style={{ padding: "10px", minHeight: "100vh" }}>
-        <Typography variant="h4" gutterBottom align="center" color="primary">
-          Profit/Loss Dashboard
-        </Typography>
+      <div style={{ padding: "10px"}}>
 
         {/* Date Pickers */}
-        <Grid container spacing={2} justifyContent="center" sx={{ mb: 4,mt:2 }}>
+        <Grid container spacing={2} justifyContent="center" sx={{ mb: 4 }}>
           <Grid item>
             <DatePicker
               label="Start Date"
@@ -147,8 +144,9 @@ const ProfitLossDashboard = () => {
         </Grid>
 
         {/* Data Table */}
-        <div style={{ height: 800, width: "100%", backgroundColor: "#fff", borderRadius: "12px" }}>
+        <div style={{ width: "100%", backgroundColor: "#fff", borderRadius: "12px" }}>
           <DataGrid
+            autoHeight
             rows={orders}
             columns={columns}
             pageSize={pageSize}

@@ -6,20 +6,21 @@ import {
 import { Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon } from '@mui/icons-material';
 import { getFirestore, collection, addDoc, getDocs, updateDoc, deleteDoc, doc, serverTimestamp,Timestamp } from 'firebase/firestore';
 import { db } from './Firebase';
+import { set } from 'date-fns';
 
 const DataEntryForm = () => {
   const [formData, setFormData] = useState({
     date: '', itemName: '', description: '', formType: '', quantity: 1, 
     price: 0, amount: 0, gateName: '', customerId: '',
     payees: [
-      { payeeName: '', costPrice: 0, quantity: 1, costAmount: 0 },
-      { payeeName: '', costPrice: 0, quantity: 1, costAmount: 0 }
+      { payeeId: '', payeeName: '', costPrice: 0, quantity: 1, costAmount: 0 },
+      { payeeId: '', payeeName: '', costPrice: 0, quantity: 1, costAmount: 0 }
     ]
   });
   
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [customers, setCustomers] = useState([]);
-  const [itemNames, setItemNames] = useState(null);
+  const [itemNames, setItemNames] = useState([]);
   const [openModal, setOpenModal] = useState(false);
   const [newCustomer, setNewCustomer] = useState('');
   const [editingCustomer, setEditingCustomer] = useState(null);
@@ -27,6 +28,9 @@ const DataEntryForm = () => {
   const [loading, setLoading] = useState(false);
   const [gateNames, setGateNames] = useState([]);
   const [payeeNames, setPayeeNames] = useState([]);
+  const [openPayeeModal, setOpenPayeeModal] = useState(false);
+  const [newPayee, setNewPayee] = useState('');
+  const [editingPayee, setEditingPayee] = useState(null);
 
   // Fetch customers and item names on component mount
   useEffect(() => {
@@ -40,29 +44,28 @@ const DataEntryForm = () => {
 
       const ordersSnapshot = await getDocs(collection(db, 'orders'));
       const allItemNames = ordersSnapshot.docs.map(doc => doc.data().itemName);
-      console.log('All Item Names:', allItemNames);
       const uniqueItemNames = [...new Set(allItemNames)].filter(Boolean).map(name => ({ name }));
       setItemNames(uniqueItemNames);
-      console.log('Unique Item Names:', uniqueItemNames);
 
       const allGateNames = ordersSnapshot.docs.map(doc => doc.data().gateName)
         .filter(name => name);
       const uniqueGateNames = [...new Set(allGateNames)].map(name => ({ name }));
-      console.log('Unique Gate Names:', uniqueGateNames);
       setGateNames(uniqueGateNames);
 
       // Fetch payee names
     const payeeSnapshot = await getDocs(collection(db, 'payees'));
-    const allPayeeNames = payeeSnapshot.docs.map(doc => doc.data().payeeName);
-    const uniquePayeeNames = [...new Set(allPayeeNames)].filter(Boolean).map(name => ({ name }));
-    setPayeeNames(uniquePayeeNames);
+    const payeeList= payeeSnapshot.docs.map(doc => ({
+      id: doc.id,
+      name: doc.data().name
+    }));
+    setPayeeNames(payeeList);
     };
+   
     fetchData();
   }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    console.log('Form Data:', formData);
     if (!formData.date || !formData.itemName || !formData.formType || !formData.customerId) {
       setSnackbar({ open: true, message: 'Please fill out all required fields', severity: 'error' });
       return;
@@ -89,28 +92,18 @@ const DataEntryForm = () => {
         createdAt: serverTimestamp(),
         status: 'unpaid',
         paidAmount: 0,
-        orderId: `${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 100)}`
+        orderId: `${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 100)}`,
+        payees: formData.payees.map((payee) => ({
+          payeeId: payee.payeeId || '',
+          payeeName: payee.payeeName || '',
+          costPrice: parseFloat(payee.costPrice) || 0,
+          quantity: parseFloat(payee.quantity) || 0,
+          costAmount: parseFloat(payee.costAmount) || 0,
+        })),
       };
       
       const docRef = await addDoc(collection(db, 'orders'), orderData);
 
-      // Save payee data
-      for (const payee of formData.payees) {
-        if (payee.payeeName && payee.costPrice && payee.quantity) {
-          await addDoc(collection(db, 'payees'), {
-            orderId: docRef.id,
-            payeeName: payee.payeeName,
-            costPrice: parseFloat(payee.costPrice) || 0,
-            quantity: parseFloat(payee.quantity) || 0,
-            costAmount: parseFloat(payee.costAmount) || 0,
-            createdAt: serverTimestamp(),
-            status:'unpaid',
-            paidAmount: 0,
-            orderDate: formData.date,
-          });
-        }
-      }
-      
       if (!itemNames.some(item => item.name === formData.itemName)) {
         setItemNames([...itemNames, { name: formData.itemName }]);
       }
@@ -144,7 +137,7 @@ const DataEntryForm = () => {
       newData.amount = (price * quantity).toFixed(0);
       newData.costAmount = (costprice * quantity).toFixed(0);
     }
-    console.log('Updated Form Data:', newData);
+    
     setFormData(newData);
   };
 
@@ -154,15 +147,15 @@ const DataEntryForm = () => {
       date: '', itemName: '', description: '', formType: '', quantity: '', 
       price: '', amount: '', gateName: '', customerId: '',
       payees: [
-        { payeeName: '', costPrice: 0, quantity: 0, costAmount: 0 },
-        { payeeName: '', costPrice: 0, quantity: 0, costAmount: 0 }
+        { payeeId: '', payeeName: '', costPrice: 0, quantity: 0, costAmount: 0 },
+        { payeeId: '', payeeName: '', costPrice: 0, quantity: 0, costAmount: 0 }
       ]
     });
     
     // Reset Autocomplete selections
     setSelectedCustomer(null);
     
-    console.log('Form cleared');
+   
   };
 
   // Customer management functions
@@ -204,15 +197,62 @@ const DataEntryForm = () => {
 
   const handlePayeeChange = (index, field, value) => {
     const newPayees = [...formData.payees];
-    newPayees[index] = { ...newPayees[index], [field]: value };
     
-    if (field === 'costPrice' || field === 'quantity') {
-      const costPrice = parseFloat(newPayees[index].costPrice) || 0;
-      const quantity = parseFloat(newPayees[index].quantity) || 0;
-      newPayees[index].costAmount = (costPrice * quantity).toFixed(0);
+    if (field === 'payee') {
+      // Handle the case when both payeeId and payeeName are updated together
+      newPayees[index] = { 
+        ...newPayees[index], 
+        payeeId: value.payeeId,
+        payeeName: value.payeeName 
+      };
+    } else {
+      // Handle other field updates as before
+      newPayees[index] = { ...newPayees[index], [field]: value };
+      
+      if (field === 'costPrice' || field === 'quantity') {
+        const costPrice = parseFloat(newPayees[index].costPrice) || 0;
+        const quantity = parseFloat(newPayees[index].quantity) || 0;
+        newPayees[index].costAmount = (costPrice * quantity).toFixed(0);
+      }
     }
     
     setFormData({ ...formData, payees: newPayees });
+  };
+
+  const handleAddPayee = async () => {
+    if (!newPayee) return;
+    try {
+      const docRef = await addDoc(collection(db, 'payees'), { name: newPayee, createdAt: serverTimestamp() });
+      setPayeeNames([...payeeNames, { id: docRef.id, name: newPayee }]);
+      setNewPayee('');
+      setOpenPayeeModal(false);
+      setSnackbar({ open: true, message: 'Payee added successfully!', severity: 'success' });
+    } catch (error) {
+      setSnackbar({ open: true, message: `Error: ${error.message}`, severity: 'error' });
+    }
+  };
+
+  const handleEditPayee = async (payee) => {
+    try {
+      const payeeRef = doc(db, 'payees', payee.id);
+      await updateDoc(payeeRef, { name: newPayee });
+      setPayeeNames(payeeNames.map(p => p.id === payee.id ? { ...p, name: newPayee } : p));
+      setEditingPayee(null);
+      setNewPayee('');
+      setSnackbar({ open: true, message: 'Payee updated successfully!', severity: 'success' });
+    } catch (error) {
+      setSnackbar({ open: true, message: `Error: ${error.message}`, severity: 'error' });
+    }
+  };
+
+  const handleDeletePayee = async (id) => {
+    try {
+      await deleteDoc(doc(db, 'payees', id));
+      setPayeeNames(payeeNames.filter(p => p.id !== id));
+      setSnackbar({ open: true, message: 'Payee deleted successfully!', severity: 'success' });
+    } catch (error) {
+      setSnackbar({ open: true, message: `Error: ${error.message}`, severity: 'error' });
+    }
   };
 
   return (
@@ -365,27 +405,40 @@ const DataEntryForm = () => {
 
           <Grid item xs={12}>
           <Typography variant="subtitle1" sx={{ mb: 2 }}>Payee Details</Typography>
+          <Grid item xs={3} md={3} sm={3} lg={3} mb={3}>
+            <Button 
+              variant="outlined" 
+              startIcon={<AddIcon />}
+              onClick={() => setOpenPayeeModal(true)}
+              sx={{ height: '100%' }}
+            >
+              Add New Payee
+            </Button>
+          </Grid>
           {formData.payees.map((payee, index) => (
             <Grid container spacing={2} key={index} sx={{ mb: 2 }}>
-              <Grid item xs={12} sm={3}>
-                <Autocomplete
-                  options={payeeNames}
-                  getOptionLabel={(option) => option.name || ''}
-                  onChange={(event, newValue) => handlePayeeChange(index, 'payeeName', newValue?.name || '')}
-                  inputValue={payee.payeeName}
-                  onInputChange={(event, newInputValue) => {
-                    handlePayeeChange(index, 'payeeName', newInputValue);
-                  }}
-                  freeSolo
-                  renderInput={(params) => (
-                    <TextField 
-                      {...params}
-                      label={`Payee ${index + 1} Name`}
-                      fullWidth
-                    />
-                  )}
+            <Grid item xs={12} sm={3}>
+            <Autocomplete
+              options={payeeNames}
+              getOptionLabel={(option) => option.name || ''}
+              value={payeeNames.find((p) => p.id === payee.payeeId) || null}
+              onChange={(event, newValue) => {
+                // Update both payeeId and payeeName in a single handlePayeeChange call
+                // to avoid unnecessary re-renders
+                handlePayeeChange(index, 'payee', {
+                  payeeId: newValue?.id || '',
+                  payeeName: newValue?.name || ''
+                });
+              }}
+              renderInput={(params) => (
+                <TextField 
+                  {...params}
+                  label={`Payee ${index + 1} Name`}
+                  fullWidth
                 />
-              </Grid>
+              )}
+            />
+            </Grid>
               <Grid item xs={12} sm={3}>
                 <TextField
                   fullWidth
@@ -476,6 +529,55 @@ const DataEntryForm = () => {
                     <EditIcon />
                   </IconButton>
                   <IconButton onClick={() => handleDeleteCustomer(customer.id)}>
+                    <DeleteIcon />
+                  </IconButton>
+                </Box>
+              </Box>
+            ))}
+          </Box>
+        </Box>
+      </Modal>
+
+      {/* Payee Management Modal */}
+      <Modal open={openPayeeModal} onClose={() => { setOpenPayeeModal(false); setEditingPayee(null); setNewPayee(''); }}>
+        <Box sx={{
+          position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+          width: { xs: '90%', sm: 400 }, bgcolor: 'background.paper', boxShadow: 24, p: 4, borderRadius: 2
+        }}>
+          <Typography variant="h6" gutterBottom>
+            {editingPayee ? 'Edit Payee' : 'Manage Payees'}
+          </Typography>
+          
+          <TextField
+            fullWidth
+            label="Payee Name"
+            value={newPayee}
+            onChange={(e) => setNewPayee(e.target.value)}
+            sx={{ mb: 2 }}
+          />
+          
+          <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
+            <Button 
+              variant="contained" 
+              onClick={editingPayee ? () => handleEditPayee(editingPayee) : handleAddPayee}
+              disabled={!newPayee}
+            >
+              {editingPayee ? 'Update' : 'Add'}
+            </Button>
+            <Button variant="outlined" onClick={() => { setEditingPayee(null); setNewPayee(''); }}>
+              Clear
+            </Button>
+          </Box>
+
+          <Box sx={{ maxHeight: 200, overflow: 'auto' }}>
+            {payeeNames.map(payee => (
+              <Box key={payee.id} sx={{ display: 'flex', justifyContent: 'space-between', py: 1 }}>
+                <Typography>{payee.name}</Typography>
+                <Box>
+                  <IconButton onClick={() => { setEditingPayee(payee); setNewPayee(payee.name); }}>
+                    <EditIcon />
+                  </IconButton>
+                  <IconButton onClick={() => handleDeletePayee(payee.id)}>
                     <DeleteIcon />
                   </IconButton>
                 </Box>

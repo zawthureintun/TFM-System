@@ -25,7 +25,6 @@ import {
 } from '@mui/material';
 import { db } from './Firebase';
 import {
-  getFirestore,
   collection,
   onSnapshot,
   addDoc,
@@ -45,11 +44,11 @@ const PaymentReconciliationSystem = () => {
   const [selectedPayment, setSelectedPayment] = useState(null);
   const [isEditFormOpen, setIsEditFormOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [selectedEntity, setSelectedEntity] = useState(''); // Changed from selectedCustomer
-  const [selectedEntityType, setSelectedEntityType] = useState('customer'); // New state for entity type
+  const [selectedEntity, setSelectedEntity] = useState('');
+  const [selectedEntityType, setSelectedEntityType] = useState('customer');
   const [customers, setCustomers] = useState([]);
-  const [payees, setPayees] = useState([]); // New state for payees
-  const [records, setRecords] = useState([]); // Changed from orders to records
+  const [payees, setPayees] = useState([]);
+  const [records, setRecords] = useState([]);
   const [payments, setPayments] = useState([]);
   const [isPaymentFormOpen, setIsPaymentFormOpen] = useState(false);
   const [newPayment, setNewPayment] = useState({
@@ -61,11 +60,11 @@ const PaymentReconciliationSystem = () => {
 
   const paymentMethods = ['Cash', 'Kpay', 'WavePay', 'Bank Transfer'];
   const [dateRange, setDateRange] = useState({
-    startDate: new Date(),
-    endDate: new Date(),
+    startDate: new Date().toISOString().split('T')[0],
+    endDate: new Date().toISOString().split('T')[0],
   });
   const contentRef = useRef(null);
-  const reactToPrintFn = useReactToPrint({ contentRef });
+  const reactToPrintFn = useReactToPrint({ content: () => contentRef.current });
 
   // Fetch customers and payees from Firestore
   useEffect(() => {
@@ -119,6 +118,8 @@ const PaymentReconciliationSystem = () => {
           const ordersData = snapshot.docs.map((doc) => ({
             id: doc.id,
             ...doc.data(),
+            paidAmount: doc.data().paidAmount || 0,
+            status: doc.data().status || 'unpaid',
           }));
           const updatedRecords = [...ordersData].sort(
             (a, b) => new Date(a.date) - new Date(b.date)
@@ -145,21 +146,40 @@ const PaymentReconciliationSystem = () => {
           unsubscribePayments();
         };
       } else {
-        // Fetch payee records
-        const payeesQuery = query(
-          collection(db, 'payees'),
-          where('payeeName', '==', payees.find((p) => p.id === entityId)?.payeeName)
-        );
-        const unsubscribePayees = onSnapshot(payeesQuery, (snapshot) => {
-          const payeeData = snapshot.docs.map((doc) => ({
-            id: doc.id,
-            ...doc.data(),
-            amount: doc.data().costAmount, // Map costAmount to amount for consistency
-            date: doc.data().orderDate, // Map orderDate to date
-          }));
-          const updatedRecords = [...payeeData].sort(
-            (a, b) => new Date(a.date) - new Date(b.date)
-          );
+        // Fetch orders where this payee is mentioned
+        const ordersRef = collection(db, 'orders');
+        const unsubscribeOrders = onSnapshot(ordersRef, (snapshot) => {
+          const ordersData = snapshot.docs
+            .map((doc) => {
+              const orderData = doc.data();
+              // Find payee entries that match the selected payee
+              const payeeEntries = (orderData.payees || []).filter(
+                (payee) => payee.payeeId === entityId
+              );
+              
+              if (payeeEntries.length === 0) return null;
+              
+              // Create record entries for each payee line item
+              return payeeEntries.map((payee) => ({
+                id: doc.id + '-' + payee.payeeId, // Create a unique ID
+                orderId: doc.id,
+                date: orderData.date,
+                amount: payee.costAmount || 0,
+                quantity: payee.quantity || 1,
+                paidAmount: payee.paidAmount || 0,
+                status: payee.status || 'unpaid',
+                payeeId: payee.payeeId,
+                payeeName: payee.payeeName,
+                description: orderData.description || '',
+              }));
+            })
+            .filter(Boolean) // Remove null entries
+            .flat(); // Flatten the array of arrays
+
+          const updatedRecords = ordersData
+            .filter(record => record.payeeId === entityId)
+            .sort((a, b) => new Date(a.date) - new Date(b.date));
+            
           setRecords(updatedRecords);
           setIsLoading(false);
         });
@@ -178,7 +198,7 @@ const PaymentReconciliationSystem = () => {
         });
 
         return () => {
-          unsubscribePayees();
+          unsubscribeOrders();
           unsubscribePayments();
         };
       }
@@ -198,22 +218,46 @@ const PaymentReconciliationSystem = () => {
 
     for (let record of updatedRecords) {
       if (record.status === 'unpaid' && remainingPayment > 0) {
-        const unpaidAmount = record.amount - record.paidAmount;
+        const unpaidAmount = record.amount - (record.paidAmount || 0);
         const allocation = Math.min(remainingPayment, unpaidAmount);
 
-        record.paidAmount += allocation;
+        record.paidAmount = (record.paidAmount || 0) + allocation;
         remainingPayment -= allocation;
 
         if (record.paidAmount >= record.amount) {
           record.status = 'paid';
         }
 
-        // Update record in Firestore
-        const collectionName = selectedEntityType === 'customer' ? 'orders' : 'payees';
-        await updateDoc(doc(db, collectionName, record.id), {
-          paidAmount: record.paidAmount,
-          status: record.status,
-        });
+        // Update record in Firestore based on entity type
+        if (selectedEntityType === 'customer') {
+          await updateDoc(doc(db, 'orders', record.id), {
+            paidAmount: record.paidAmount,
+            status: record.status,
+          });
+        } else {
+          // For payees, we need to update the specific payee entry in the order
+          const orderDoc = await doc(db, 'orders', record.orderId);
+          const orderSnapshot = await onSnapshot(orderDoc, (snapshot) => {
+            const orderData = snapshot.data();
+            const payees = orderData.payees || [];
+            
+            // Find and update the specific payee
+            const updatedPayees = payees.map(payee => {
+              if (payee.payeeId === record.payeeId) {
+                return {
+                  ...payee,
+                  paidAmount: record.paidAmount,
+                  status: record.status
+                };
+              }
+              return payee;
+            });
+            
+            // Update the order with the modified payees array
+            updateDoc(orderDoc, { payees: updatedPayees });
+            orderSnapshot(); // Unsubscribe
+          });
+        }
       }
     }
 
@@ -227,7 +271,6 @@ const PaymentReconciliationSystem = () => {
       return;
 
     const paymentToAdd = {
-      [selectedEntityType === 'customer' ? 'customerId' : 'payeeId']: selectedEntity,
       date: newPayment.date,
       amount: parseFloat(newPayment.amount),
       description: newPayment.description,
@@ -236,11 +279,20 @@ const PaymentReconciliationSystem = () => {
       transactionId: `${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 100)}`,
     };
 
+    // Add entity-specific fields based on selected entity type
+    if (selectedEntityType === 'customer') {
+      paymentToAdd.customerId = selectedEntity;
+    } else {
+      paymentToAdd.payeeId = selectedEntity;
+      const selectedPayeeData = payees.find(p => p.id === selectedEntity);
+      paymentToAdd.payeeName = selectedPayeeData?.name || selectedPayeeData?.payeeName || 'Unknown Payee';
+    }
+
     try {
       const paymentRef = await addDoc(collection(db, 'payments'), paymentToAdd);
       const unallocated = await allocatePayment(paymentToAdd.amount, paymentRef.id);
 
-      await updateDoc(paymentRef, {
+      await updateDoc(doc(db, 'payments', paymentRef.id), {
         allocated: true,
         unallocatedAmount: unallocated,
       });
@@ -263,13 +315,38 @@ const PaymentReconciliationSystem = () => {
 
     try {
       // Reset affected records
-      const affectedRecords = records.filter((record) => record.paidAmount > 0);
-      const collectionName = selectedEntityType === 'customer' ? 'orders' : 'payees';
+      const affectedRecords = records.filter((record) => (record.paidAmount || 0) > 0);
+      
       for (let record of affectedRecords) {
-        await updateDoc(doc(db, collectionName, record.id), {
-          paidAmount: 0,
-          status: 'unpaid',
-        });
+        if (selectedEntityType === 'customer') {
+          await updateDoc(doc(db, 'orders', record.id), {
+            paidAmount: 0,
+            status: 'unpaid',
+          });
+        } else {
+          // For payees, update the specific payee entry in the order
+          const orderDoc = doc(db, 'orders', record.orderId);
+          const orderSnapshot = await onSnapshot(orderDoc, (snapshot) => {
+            const orderData = snapshot.data();
+            const payees = orderData.payees || [];
+            
+            // Find and update the specific payee
+            const updatedPayees = payees.map(payee => {
+              if (payee.payeeId === record.payeeId) {
+                return {
+                  ...payee,
+                  paidAmount: 0,
+                  status: 'unpaid'
+                };
+              }
+              return payee;
+            });
+            
+            // Update the order with the modified payees array
+            updateDoc(orderDoc, { payees: updatedPayees });
+            orderSnapshot(); // Unsubscribe
+          });
+        }
       }
 
       // Delete the payment
@@ -300,13 +377,38 @@ const PaymentReconciliationSystem = () => {
 
     try {
       // Reset affected records
-      const affectedRecords = records.filter((record) => record.paidAmount > 0);
-      const collectionName = selectedEntityType === 'customer' ? 'orders' : 'payees';
+      const affectedRecords = records.filter((record) => (record.paidAmount || 0) > 0);
+      
       for (let record of affectedRecords) {
-        await updateDoc(doc(db, collectionName, record.id), {
-          paidAmount: 0,
-          status: 'unpaid',
-        });
+        if (selectedEntityType === 'customer') {
+          await updateDoc(doc(db, 'orders', record.id), {
+            paidAmount: 0,
+            status: 'unpaid',
+          });
+        } else {
+          // For payees, update the specific payee entry in the order
+          const orderDoc = doc(db, 'orders', record.orderId);
+          const orderSnapshot = await onSnapshot(orderDoc, (snapshot) => {
+            const orderData = snapshot.data();
+            const payees = orderData.payees || [];
+            
+            // Find and update the specific payee
+            const updatedPayees = payees.map(payee => {
+              if (payee.payeeId === record.payeeId) {
+                return {
+                  ...payee,
+                  paidAmount: 0,
+                  status: 'unpaid'
+                };
+              }
+              return payee;
+            });
+            
+            // Update the order with the modified payees array
+            updateDoc(orderDoc, { payees: updatedPayees });
+            orderSnapshot(); // Unsubscribe
+          });
+        }
       }
 
       // Update the payment
@@ -333,14 +435,14 @@ const PaymentReconciliationSystem = () => {
       setSelectedPayment(null);
     } catch (error) {
       console.error('Error updating payment:', error);
-    };
+    }
   };
 
   // Calculate totals and balances
   const calculations = useMemo(() => {
-    const totalRecords = records.reduce((sum, record) => sum + record.amount, 0);
-    const totalPayments = payments.reduce((sum, payment) => sum + payment.amount, 0);
-    const totalPaid = records.reduce((sum, record) => sum + record.paidAmount, 0);
+    const totalRecords = records.reduce((sum, record) => sum + (record.amount || 0), 0);
+    const totalPayments = payments.reduce((sum, payment) => sum + (payment.amount || 0), 0);
+    const totalPaid = records.reduce((sum, record) => sum + (record.paidAmount || 0), 0);
     const remainingBalance = totalRecords - totalPaid;
 
     return {
@@ -383,11 +485,11 @@ const PaymentReconciliationSystem = () => {
         ? customers.find((c) => c.id === selectedEntity)
         : payees.find((p) => p.id === selectedEntity);
     const totals = {
-      totalRecords: filteredRecords.reduce((sum, record) => sum + record.amount, 0),
-      totalPayments: filteredPayments.reduce((sum, payment) => sum + payment.amount, 0),
-      totalPaid: filteredRecords.reduce((sum, record) => sum + record.paidAmount, 0),
+      totalRecords: filteredRecords.reduce((sum, record) => sum + (record.amount || 0), 0),
+      totalPayments: filteredPayments.reduce((sum, payment) => sum + (payment.amount || 0), 0),
+      totalPaid: filteredRecords.reduce((sum, record) => sum + (record.paidAmount || 0), 0),
       remainingBalance: filteredRecords.reduce(
-        (sum, record) => sum + (record.amount - record.paidAmount),
+        (sum, record) => sum + ((record.amount || 0) - (record.paidAmount || 0)),
         0
       ),
     };
@@ -405,7 +507,10 @@ const PaymentReconciliationSystem = () => {
 
   // Reset date range
   const handleResetDateRange = () => {
-    setDateRange({ startDate: new Date(), endDate: new Date() });
+    setDateRange({
+      startDate: new Date().toISOString().split('T')[0],
+      endDate: new Date().toISOString().split('T')[0]
+    });
   };
 
   return (
@@ -439,7 +544,7 @@ const PaymentReconciliationSystem = () => {
                 </MenuItem>
                 {(selectedEntityType === 'customer' ? customers : payees).map((entity) => (
                   <MenuItem key={entity.id} value={entity.id}>
-                    {entity.name || entity.payeeName}
+                    {entity.name || entity.payeeName || 'Unnamed'}
                   </MenuItem>
                 ))}
               </Select>
@@ -551,32 +656,40 @@ const PaymentReconciliationSystem = () => {
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {filteredRecords.map((record) => (
-                        <TableRow key={record.id}>
-                          <TableCell>
-                            {format(new Date(record.date), 'dd-MM-yyyy')}
-                          </TableCell>
-                          <TableCell align="right">
-                            {record.amount.toLocaleString()}
-                          </TableCell>
-                          {selectedEntityType === 'payee' && (
-                            <TableCell align="right">{record.quantity}</TableCell>
-                          )}
-                          <TableCell align="right">
-                            {record.paidAmount.toLocaleString()}
-                          </TableCell>
-                          <TableCell align="right">
-                            {(record.amount - record.paidAmount).toLocaleString()}
-                          </TableCell>
-                          <TableCell>
-                            <Chip
-                              label={record.status}
-                              color={record.status === 'paid' ? 'success' : 'warning'}
-                              size="small"
-                            />
+                      {filteredRecords.length > 0 ? (
+                        filteredRecords.map((record) => (
+                          <TableRow key={record.id}>
+                            <TableCell>
+                              {format(new Date(record.date), 'dd-MM-yyyy')}
+                            </TableCell>
+                            <TableCell align="right">
+                              {(record.amount || 0).toLocaleString()}
+                            </TableCell>
+                            {selectedEntityType === 'payee' && (
+                              <TableCell align="right">{record.quantity || 1}</TableCell>
+                            )}
+                            <TableCell align="right">
+                              {(record.paidAmount || 0).toLocaleString()}
+                            </TableCell>
+                            <TableCell align="right">
+                              {((record.amount || 0) - (record.paidAmount || 0)).toLocaleString()}
+                            </TableCell>
+                            <TableCell>
+                              <Chip
+                                label={record.status || 'unpaid'}
+                                color={record.status === 'paid' ? 'success' : 'warning'}
+                                size="small"
+                              />
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      ) : (
+                        <TableRow>
+                          <TableCell colSpan={selectedEntityType === 'payee' ? 6 : 5} align="center">
+                            No records found
                           </TableCell>
                         </TableRow>
-                      ))}
+                      )}
                     </TableBody>
                   </Table>
                 </TableContainer>
@@ -633,27 +746,35 @@ const PaymentReconciliationSystem = () => {
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {filteredPayments.map((payment) => (
-                        <TableRow
-                          key={payment.id}
-                          hover
-                          onClick={() => setSelectedPayment(payment)}
-                          selected={selectedPayment?.id === payment.id}
-                          sx={{ cursor: 'pointer' }}
-                        >
-                          <TableCell>
-                            {format(new Date(payment.date), 'dd-MM-yyyy')}
-                          </TableCell>
-                          <TableCell>{payment.description}</TableCell>
-                          <TableCell>{payment.paymentMethod}</TableCell>
-                          <TableCell align="right">
-                            {payment.amount.toLocaleString()}
-                          </TableCell>
-                          <TableCell align="right">
-                            {payment.unallocatedAmount || 0}
+                      {filteredPayments.length > 0 ? (
+                        filteredPayments.map((payment) => (
+                          <TableRow
+                            key={payment.id}
+                            hover
+                            onClick={() => setSelectedPayment(payment)}
+                            selected={selectedPayment?.id === payment.id}
+                            sx={{ cursor: 'pointer' }}
+                          >
+                            <TableCell>
+                              {format(new Date(payment.date), 'dd-MM-yyyy')}
+                            </TableCell>
+                            <TableCell>{payment.description}</TableCell>
+                            <TableCell>{payment.paymentMethod}</TableCell>
+                            <TableCell align="right">
+                              {payment.amount.toLocaleString()}
+                            </TableCell>
+                            <TableCell align="right">
+                              {(payment.unallocatedAmount || 0).toLocaleString()}
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      ) : (
+                        <TableRow>
+                          <TableCell colSpan={5} align="center">
+                            No payments found
                           </TableCell>
                         </TableRow>
-                      ))}
+                      )}
                     </TableBody>
                   </Table>
                 </TableContainer>
@@ -670,7 +791,7 @@ const PaymentReconciliationSystem = () => {
         maxWidth="sm"
         fullWidth
       >
-        <DialogTitle>Add New Payment</DialogTitle>
+        <DialogTitle>Add New Payment for {selectedEntityType === 'customer' ? 'Customer' : 'Payee'}</DialogTitle>
         <DialogContent>
           <Box sx={{ pt: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
             <TextField
@@ -733,8 +854,8 @@ const PaymentReconciliationSystem = () => {
         </DialogActions>
       </Dialog>
 
-      {/* Edit Payment Dialog */}
-      <Dialog
+     {/* Edit Payment Dialog */}
+     <Dialog
         open={isEditFormOpen}
         onClose={() => setIsEditFormOpen(false)}
         maxWidth="sm"
@@ -742,59 +863,55 @@ const PaymentReconciliationSystem = () => {
       >
         <DialogTitle>Edit Payment</DialogTitle>
         <DialogContent>
-          <Box sx={{ pt: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <TextField
-              label="Date"
-              type="date"
-              value={selectedPayment?.date || ''}
-              onChange={(e) =>
-                setSelectedPayment({ ...selectedPayment, date: e.target.value })
-              }
-              fullWidth
-              required
-              InputLabelProps={{ shrink: true }}
-            />
-            <TextField
-              label="Description"
-              value={selectedPayment?.description || ''}
-              onChange={(e) =>
-                setSelectedPayment({
-                  ...selectedPayment,
-                  description: e.target.value,
-                })
-              }
-              fullWidth
-            />
-            <FormControl fullWidth required>
-              <InputLabel>Payment Method</InputLabel>
-              <Select
-                value={selectedPayment?.paymentMethod || ''}
+          {selectedPayment && (
+            <Box sx={{ pt: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <TextField
+                label="Date"
+                type="date"
+                value={selectedPayment.date}
                 onChange={(e) =>
-                  setSelectedPayment({
-                    ...selectedPayment,
-                    paymentMethod: e.target.value,
-                  })
+                  setSelectedPayment({ ...selectedPayment, date: e.target.value })
                 }
-                label="Payment Method"
-              >
-                {paymentMethods.map((method) => (
-                  <MenuItem key={method} value={method}>
-                    {method}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <TextField
-              label="Amount"
-              type="number"
-              value={selectedPayment?.amount || ''}
-              onChange={(e) =>
-                setSelectedPayment({ ...selectedPayment, amount: e.target.value })
-              }
-              fullWidth
-              required
-            />
-          </Box>
+                fullWidth
+                required
+                InputLabelProps={{ shrink: true }}
+              />
+              <TextField
+                label="Description"
+                value={selectedPayment.description || ''}
+                onChange={(e) =>
+                  setSelectedPayment({ ...selectedPayment, description: e.target.value })
+                }
+                fullWidth
+              />
+              <FormControl fullWidth required>
+                <InputLabel>Payment Method</InputLabel>
+                <Select
+                  value={selectedPayment.paymentMethod || ''}
+                  onChange={(e) =>
+                    setSelectedPayment({ ...selectedPayment, paymentMethod: e.target.value })
+                  }
+                  label="Payment Method"
+                >
+                  {paymentMethods.map((method) => (
+                    <MenuItem key={method} value={method}>
+                      {method}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <TextField
+                label="Amount"
+                type="number"
+                value={selectedPayment.amount || ''}
+                onChange={(e) =>
+                  setSelectedPayment({ ...selectedPayment, amount: e.target.value })
+                }
+                fullWidth
+                required
+              />
+            </Box>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setIsEditFormOpen(false)}>Cancel</Button>
@@ -803,7 +920,7 @@ const PaymentReconciliationSystem = () => {
             variant="contained"
             color="primary"
           >
-            Save Changes
+            Update Payment
           </Button>
         </DialogActions>
       </Dialog>

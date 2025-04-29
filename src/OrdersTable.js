@@ -210,8 +210,10 @@ const OrdersTable = () => {
   };
 
   const handleRemovePayee = (index) => {
-    const newPayees = editFormData.payees.filter((_, i) => i !== index);
-    setEditFormData({ ...editFormData, payees: newPayees });
+    if (editFormData.payees.length >=1 ) {
+      const newPayees = editFormData.payees.filter((_, i) => i !== index);
+      setEditFormData({ ...editFormData, payees: newPayees });
+    } 
   };
 
   const handleEditFormSubmit = async () => {
@@ -219,7 +221,7 @@ const OrdersTable = () => {
       setLoading(true);
       try {
         const orderRef = doc(db, 'orders', selectedOrder.id);
-        
+
         // Calculate totalPayeeCost
         const totalPayeeCost = editFormData.payees.reduce((total, payee) => {
           if (payee.payeeName && payee.costPrice && payee.quantity) {
@@ -230,6 +232,14 @@ const OrdersTable = () => {
           return total;
         }, 0);
 
+        // Ensure all fields in payees are valid
+        const sanitizedPayees = editFormData.payees.map((payee) => ({
+          payeeName: payee.payeeName || '',
+          costPrice: payee.costPrice || 0,
+          quantity: payee.quantity || 0,
+          costAmount: payee.costAmount || 0,
+        }));
+
         // Prepare order data
         const updateData = {
           ...editFormData,
@@ -237,68 +247,27 @@ const OrdersTable = () => {
           price: parseFloat(editFormData.price) || 0,
           amount: parseFloat(editFormData.amount) || 0,
           totalPayeeCost,
+          payees: sanitizedPayees,
         };
-        
-        // Remove id and payees from order update (payees are stored separately)
-        const { id, payees, ...dataToUpdate } = updateData;
-        
+
         // Update order in Firestore
-        await updateDoc(orderRef, dataToUpdate);
-
-        // Update payee data
-        // First, delete existing payees for this order
-        const payeesQuery = query(
-          collection(db, 'payees'),
-          where('orderId', '==', selectedOrder.id)
-        );
-        const payeesSnapshot = await getDocs(payeesQuery);
-        for (const payeeDoc of payeesSnapshot.docs) {
-          await deleteDoc(doc(db, 'payees', payeeDoc.id));
-        }
-
-        // Add new payees
-        for (const payee of editFormData.payees) {
-          if (payee.payeeName && payee.costPrice && payee.quantity) {
-            await addDoc(collection(db, 'payees'), {
-              orderId: selectedOrder.id,
-              payeeName: payee.payeeName,
-              costPrice: parseFloat(payee.costPrice) || 0,
-              quantity: parseFloat(payee.quantity) || 0,
-              costAmount: parseFloat(payee.costAmount) || 0,
-              createdAt: serverTimestamp(),
-              status: 'unpaid',
-              paidAmount: 0,
-              orderDate: editFormData.date,
-            });
-          }
-        }
+        await updateDoc(orderRef, updateData);
 
         // Update local state
         setOrders(
           orders.map((order) =>
             order.id === selectedOrder.id
-              ? { ...updateData, id: selectedOrder.id, payees: editFormData.payees }
+              ? { ...updateData, id: selectedOrder.id }
               : order
           )
         );
 
-        // Update payeeNames if new payees were added
-        const newPayeeNames = editFormData.payees
-          .map((payee) => payee.payeeName)
-          .filter((name) => name && !payeeNames.some((p) => p.name === name));
-        if (newPayeeNames.length > 0) {
-          setPayeeNames([
-            ...payeeNames,
-            ...newPayeeNames.map((name) => ({ name })),
-          ]);
-        }
-        
         setSnackbar({
           open: true,
           message: 'Order updated successfully!',
           severity: 'success',
         });
-        
+
         handleCloseEditDialog();
       } catch (error) {
         console.error('Error updating order: ', error);
@@ -438,28 +407,18 @@ const OrdersTable = () => {
     setLoading(true);
     try {
       const orderRef = doc(db, 'orders', selectedOrder.id);
-  
-      // Delete related payee records
-      const payeesQuery = query(
-        collection(db, 'payees'),
-        where('orderId', '==', selectedOrder.id)
-      );
-      const payeesSnapshot = await getDocs(payeesQuery);
-      for (const payeeDoc of payeesSnapshot.docs) {
-        await deleteDoc(doc(db, 'payees', payeeDoc.id));
-      }
-  
+
       // Delete the order
       await deleteDoc(orderRef);
-  
+
       setOrders(orders.filter(order => order.id !== selectedOrder.id));
-  
+
       setSnackbar({
         open: true,
-        message: 'Order and related payee records deleted successfully!',
+        message: 'Order deleted successfully!',
         severity: 'success',
       });
-  
+
       handleCloseDeleteDialog();
     } catch (error) {
       console.error("Error deleting order: ", error);
@@ -631,7 +590,6 @@ const OrdersTable = () => {
                 <IconButton
                   onClick={() => handleRemovePayee(index)}
                   color="error"
-                  disabled={editFormData.payees.length <= 1}
                 >
                   <DeleteIcon />
                 </IconButton>
