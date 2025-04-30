@@ -110,11 +110,11 @@ const OrdersTable = () => {
 
         // Fetch payee names
         const payeeSnapshot = await getDocs(collection(db, 'payees'));
-        const allPayeeNames = payeeSnapshot.docs.map((doc) => doc.data().payeeName);
-        const uniquePayeeNames = [...new Set(allPayeeNames)]
-          .filter(Boolean)
-          .map((name) => ({ name }));
-        setPayeeNames(uniquePayeeNames);
+        const payeeList = payeeSnapshot.docs.map(doc => ({
+          id: doc.id,
+          name: doc.data().name
+        }));
+        setPayeeNames(payeeList);
       } catch (error) {
         console.error("Error fetching orders: ", error);
         setSnackbar({
@@ -146,15 +146,15 @@ const OrdersTable = () => {
       formNumber: order.formNumber || [],
       payees: order.payees && order.payees.length > 0
         ? order.payees.map((payee) => ({
-            id: payee.id,
+            payeeId: payee.payeeId || '',
             payeeName: payee.payeeName || '',
             costPrice: payee.costPrice || 0,
             quantity: payee.quantity || 0,
             costAmount: payee.costAmount || 0,
           }))
         : [
-            { payeeName: '', costPrice: 0, quantity: 0, costAmount: 0 },
-            { payeeName: '', costPrice: 0, quantity: 0, costAmount: 0 },
+            { payeeId: '', payeeName: '', costPrice: 0, quantity: 0, costAmount: 0 },
+            { payeeId: '', payeeName: '', costPrice: 0, quantity: 0, costAmount: 0 },
           ],
     });
     setIsEditDialogOpen(true);
@@ -188,12 +188,23 @@ const OrdersTable = () => {
   
   const handlePayeeChange = (index, field, value) => {
     const newPayees = [...editFormData.payees];
-    newPayees[index] = { ...newPayees[index], [field]: value };
     
-    if (field === 'costPrice' || field === 'quantity') {
-      const costPrice = parseFloat(newPayees[index].costPrice) || 0;
-      const quantity = parseFloat(newPayees[index].quantity) || 0;
-      newPayees[index].costAmount = (costPrice * quantity).toFixed(0);
+    if (field === 'payee') {
+      // Handle the case when both payeeId and payeeName are updated together
+      newPayees[index] = { 
+        ...newPayees[index], 
+        payeeId: value.payeeId || '',
+        payeeName: value.payeeName || ''
+      };
+    } else {
+      // Handle other field updates as before
+      newPayees[index] = { ...newPayees[index], [field]: value };
+      
+      if (field === 'costPrice' || field === 'quantity') {
+        const costPrice = parseFloat(newPayees[index].costPrice) || 0;
+        const quantity = parseFloat(newPayees[index].quantity) || 0;
+        newPayees[index].costAmount = (costPrice * quantity).toFixed(0);
+      }
     }
     
     setEditFormData({ ...editFormData, payees: newPayees });
@@ -204,7 +215,7 @@ const OrdersTable = () => {
       ...editFormData,
       payees: [
         ...editFormData.payees,
-        { payeeName: '', costPrice: 0, quantity: 0, costAmount: 0 },
+        { payeeId: '', payeeName: '', costPrice: 0, quantity: 0, costAmount: 0 },
       ],
     });
   };
@@ -221,7 +232,7 @@ const OrdersTable = () => {
       setLoading(true);
       try {
         const orderRef = doc(db, 'orders', selectedOrder.id);
-
+  
         // Calculate totalPayeeCost
         const totalPayeeCost = editFormData.payees.reduce((total, payee) => {
           if (payee.payeeName && payee.costPrice && payee.quantity) {
@@ -231,15 +242,16 @@ const OrdersTable = () => {
           }
           return total;
         }, 0);
-
+  
         // Ensure all fields in payees are valid
         const sanitizedPayees = editFormData.payees.map((payee) => ({
+          payeeId: payee.payeeId || '',
           payeeName: payee.payeeName || '',
-          costPrice: payee.costPrice || 0,
-          quantity: payee.quantity || 0,
-          costAmount: payee.costAmount || 0,
+          costPrice: parseFloat(payee.costPrice) || 0,
+          quantity: parseFloat(payee.quantity) || 0,
+          costAmount: parseFloat(payee.costAmount) || 0,
         }));
-
+  
         // Prepare order data
         const updateData = {
           ...editFormData,
@@ -249,10 +261,10 @@ const OrdersTable = () => {
           totalPayeeCost,
           payees: sanitizedPayees,
         };
-
+  
         // Update order in Firestore
         await updateDoc(orderRef, updateData);
-
+  
         // Update local state
         setOrders(
           orders.map((order) =>
@@ -261,13 +273,13 @@ const OrdersTable = () => {
               : order
           )
         );
-
+  
         setSnackbar({
           open: true,
           message: 'Order updated successfully!',
           severity: 'success',
         });
-
+  
         handleCloseEditDialog();
       } catch (error) {
         console.error('Error updating order: ', error);
@@ -545,18 +557,17 @@ const OrdersTable = () => {
           {editFormData.payees.map((payee, index) => (
             <Box key={index} sx={{ mb: 2, border: '1px solid #eee', p: 2, borderRadius: 1 }}>
               <Stack direction="row" spacing={2} alignItems="center">
-                <Autocomplete
+              <Autocomplete
                   options={payeeNames}
                   getOptionLabel={(option) => option.name || ''}
-                  value={payeeNames.find((p) => p.name === payee.payeeName) || null}
-                  onChange={(event, newValue) =>
-                    handlePayeeChange(index, 'payeeName', newValue?.name || '')
-                  }
-                  inputValue={payee.payeeName}
-                  onInputChange={(event, newInputValue) => {
-                    handlePayeeChange(index, 'payeeName', newInputValue);
+                  value={payeeNames.find((p) => p.id === payee.payeeId) || null}
+                  onChange={(event, newValue) => {
+                    // Update both payeeId and payeeName in a single handlePayeeChange call
+                    handlePayeeChange(index, 'payee', {
+                      payeeId: newValue?.id || '',
+                      payeeName: newValue?.name || ''
+                    });
                   }}
-                  freeSolo
                   renderInput={(params) => (
                     <TextField
                       {...params}
