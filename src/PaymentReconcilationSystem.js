@@ -64,7 +64,8 @@ const PaymentReconciliationSystem = () => {
     endDate: new Date().toISOString().split('T')[0],
   });
   const contentRef = useRef(null);
-  const reactToPrintFn = useReactToPrint({ content: () => contentRef.current });
+  const reactToPrintFn = useReactToPrint({ contentRef });
+ 
 
   // Fetch customers and payees from Firestore
   useEffect(() => {
@@ -578,11 +579,11 @@ const PaymentReconciliationSystem = () => {
               sx={{ width: 200 }}
             />
             <ButtonGroup>
-              <Button
-                variant="contained"
-                onClick={reactToPrintFn}
-                disabled={!dateRange.startDate || !dateRange.endDate}
-              >
+            <Button
+              variant="contained"
+              onClick={reactToPrintFn}
+              disabled={!dateRange.startDate || !dateRange.endDate}
+            >
                 Print Statement
               </Button>
               <Button variant="outlined" onClick={handleResetDateRange}>
@@ -593,7 +594,12 @@ const PaymentReconciliationSystem = () => {
 
           {/* Hidden Printable Component */}
           <Box sx={{ display: 'none' }}>
-            {statementData && <PrintableHistory statementData={statementData} ref={contentRef} />}
+            {statementData && (
+              <PrintableHistory 
+                statementData={statementData} 
+                ref={contentRef} 
+              />
+            )}
           </Box>
 
           {isLoading ? (
